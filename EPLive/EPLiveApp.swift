@@ -14,8 +14,8 @@ struct EPLiveApp: App {
             ContentView()
         }
         #if os(macOS)
-        .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
+        .defaultSize(width: 1280, height: 720)
+        .windowResizability(.contentMinSize)
         #endif
     }
 }

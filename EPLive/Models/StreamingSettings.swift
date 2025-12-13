@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import Combine
 
 // MARK: - FPS Options
 enum FPSOption: Int, CaseIterable, Identifiable {
@@ -123,6 +124,29 @@ enum KeyframeInterval: Int, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - Camera Rotation
+enum CameraRotation: Int, CaseIterable, Identifiable {
+    case rotate0 = 0
+    case rotate90 = 90
+    case rotate180 = 180
+    case rotate270 = 270
+    
+    var id: Int { rawValue }
+    
+    var displayName: String {
+        switch self {
+        case .rotate0: return "0°"
+        case .rotate90: return "90°"
+        case .rotate180: return "180°"
+        case .rotate270: return "270°"
+        }
+    }
+    
+    var angle: Double {
+        Double(rawValue)
+    }
+}
+
 // MARK: - Custom Resolution
 struct CustomResolution: Equatable {
     var width: Int
@@ -165,6 +189,7 @@ class StreamingSettings: ObservableObject {
     @Published var enableTorch: Bool = false
     @Published var torchLevel: Float = 0.5
     @Published var enableStabilization: Bool = true
+    @Published var cameraRotation: CameraRotation = .rotate0
     
     // Advanced
     @Published var adaptiveBitrate: Bool = false

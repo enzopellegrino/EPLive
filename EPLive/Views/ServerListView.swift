@@ -82,6 +82,9 @@ struct ServerListView: View {
                 ServerEditView(serverManager: serverManager, server: server)
             }
         }
+        #if os(macOS)
+        .frame(minWidth: 600, minHeight: 500)
+        #endif
     }
     
     private var emptyStateView: some View {

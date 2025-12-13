@@ -68,9 +68,13 @@ class CameraManager: NSObject, ObservableObject {
                 }
                 // Disabilita mirroring per frontale
                 connection.isVideoMirrored = false
-                // Orientamento automatico
+                // Orientamento
                 if connection.isVideoOrientationSupported {
+                    #if os(macOS)
+                    connection.videoOrientation = .landscapeLeft
+                    #else
                     connection.videoOrientation = .portrait
+                    #endif
                 }
             }
             #endif
@@ -195,13 +199,49 @@ class CameraManager: NSObject, ObservableObject {
     }
     
     func requestPermissions() async -> Bool {
+        // Request video permission
+        let videoGranted: Bool
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
-            return true
+            videoGranted = true
         case .notDetermined:
-            return await AVCaptureDevice.requestAccess(for: .video)
+            videoGranted = await AVCaptureDevice.requestAccess(for: .video)
         default:
-            return false
+            videoGranted = false
+        }
+        
+        // Request audio permission
+        let audioGranted: Bool
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            audioGranted = true
+        case .notDetermined:
+            audioGranted = await AVCaptureDevice.requestAccess(for: .audio)
+        default:
+            audioGranted = false
+        }
+        
+        return videoGranted && audioGranted
+    }
+    
+    // MARK: - Public API for Source Selection
+    
+    /// Get list of available cameras with ID and name
+    func getAvailableCameras() -> [(id: String, name: String)] {
+        return availableCameras.map { camera in
+            (id: camera.uniqueID, name: camera.localizedName)
+        }
+    }
+    
+    /// Get current camera ID
+    var currentCameraID: String? {
+        return selectedCamera?.uniqueID
+    }
+    
+    /// Switch to camera with specific ID
+    func switchToCamera(withID cameraID: String) {
+        if let camera = availableCameras.first(where: { $0.uniqueID == cameraID }) {
+            setupCamera(camera)
         }
     }
 }

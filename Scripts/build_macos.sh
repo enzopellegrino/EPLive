@@ -65,7 +65,7 @@ check_env() {
 clean() {
     echo -e "\n${YELLOW}🧹 Pulizia build precedenti...${NC}"
     rm -rf "$BUILD_DIR"
-    mkdir -p "$BUILD_DIR"
+    mkdir -p "$BUILD_DIR/logs"
 }
 
 # Build e Archive
@@ -75,12 +75,20 @@ archive() {
     xcodebuild archive \
         -project "$PROJECT_DIR/$APP_NAME.xcodeproj" \
         -scheme "$APP_NAME" \
-        -destination "generic/platform=macOS" \
+        -destination "platform=macOS" \
         -archivePath "$ARCHIVE_PATH" \
-        CODE_SIGN_IDENTITY="Developer ID Application" \
+        ARCHS="arm64" \
+        ONLY_ACTIVE_ARCH=NO \
+        SWIFT_OPTIMIZATION_LEVEL="-Onone" \
+        SWIFT_VERSION=5.0 \
         DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
-        CODE_SIGN_STYLE="Manual" \
-        -quiet
+        2>&1 | tee "$BUILD_DIR/logs/archive.log"
+    
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        echo -e "\n${RED}❌ Build fallita! Errori:${NC}"
+        grep "error:" "$BUILD_DIR/logs/archive.log" | head -10
+        exit 1
+    fi
     
     echo -e "${GREEN}✅ Archive creato${NC}"
 }
@@ -152,12 +160,38 @@ create_dmg() {
     
     # Rimuovi DMG esistente
     rm -f "$DMG_PATH"
+    rm -f "$BUILD_DIR/temp.dmg"
     
-    # Crea DMG semplice
-    hdiutil create -volname "$APP_NAME" \
-        -srcfolder "$APP_PATH" \
-        -ov -format UDZO \
-        "$DMG_PATH"
+    # Crea cartella temporanea per il DMG nella directory build
+    DMG_TEMP_DIR="$BUILD_DIR/dmg_temp"
+    rm -rf "$DMG_TEMP_DIR"
+    mkdir -p "$DMG_TEMP_DIR"
+    
+    # Copia l'app nella cartella temporanea
+    echo "Copio app nella cartella temporanea..."
+    cp -R "$APP_PATH" "$DMG_TEMP_DIR/"
+    
+    # Crea link simbolico alla cartella Applicazioni
+    ln -s /Applications "$DMG_TEMP_DIR/Applications"
+    
+    # Crea DMG dalla cartella temporanea (usa nome volume diverso per evitare conflitti)
+    echo "Creazione DMG..."
+    hdiutil create \
+        -volname "${APP_NAME} Installer" \
+        -srcfolder "$DMG_TEMP_DIR" \
+        -ov \
+        -format UDRW \
+        "$BUILD_DIR/temp.dmg"
+    
+    # Converti in formato compresso
+    hdiutil convert "$BUILD_DIR/temp.dmg" \
+        -format UDZO \
+        -o "$DMG_PATH"
+    
+    rm -f "$BUILD_DIR/temp.dmg"
+    
+    # Pulizia cartella temporanea
+    rm -rf "$DMG_TEMP_DIR"
     
     # Notarizza anche il DMG
     echo "Notarizzazione DMG..."

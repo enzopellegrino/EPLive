@@ -2,8 +2,6 @@
 //  ServerEditView.swift
 //  EPLive
 //
-//  Created on 12/12/2025.
-//
 
 import SwiftUI
 
@@ -49,6 +47,102 @@ struct ServerEditView: View {
     }
     
     var body: some View {
+        #if os(macOS)
+        macOSView
+        #else
+        iOSView
+        #endif
+    }
+    
+    #if os(macOS)
+    private var macOSView: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(isEditing ? "Edit Server" : "Add Server")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button(isEditing ? "Update" : "Add") {
+                    saveServer()
+                }
+                .disabled(!isValid)
+                .buttonStyle(.borderedProminent)
+            }
+            .padding()
+            
+            Divider()
+            
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    GroupBox(label: Label("Server Details", systemImage: "server.rack")) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            TextField("Name", text: $name)
+                                .textFieldStyle(.roundedBorder)
+                            
+                            TextField("URL (srt://host:port or udp://host:port)", text: $url)
+                                .textFieldStyle(.roundedBorder)
+                                .autocorrectionDisabled()
+                            
+                            if showValidation && !isValidURL {
+                                Text("Invalid URL. Use format: srt://host:port or udp://host:port")
+                                    .font(.caption)
+                                    .foregroundColor(.red)
+                            }
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    
+                    GroupBox(label: Label("Quality Settings", systemImage: "speedometer")) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Bitrate")
+                                Spacer()
+                                Text("\(Int(bitrate) / 1000) kbps")
+                                    .foregroundColor(.gray)
+                            }
+                            
+                            Slider(value: $bitrate, in: 500_000...10_000_000, step: 100_000)
+                            
+                            HStack {
+                                Text("Low")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                                Spacer()
+                                Text("High")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                            }
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    
+                    GroupBox {
+                        Toggle("Set as Default Server", isOn: $isDefault)
+                            .padding(.vertical, 4)
+                    }
+                    
+                    GroupBox(label: Label("Examples", systemImage: "info.circle")) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("SRT: srt://192.168.1.100:8888")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                            
+                            Text("UDP: udp://192.168.1.100:1234")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                        .padding(.vertical, 8)
+                    }
+                }
+                .padding(20)
+            }
+        }
+        .frame(width: 550, height: 600)
+    }
+    #endif
+    
+    private var iOSView: some View {
         NavigationView {
             Form {
                 Section(header: Text("Server Details")) {
@@ -99,15 +193,11 @@ struct ServerEditView: View {
                 
                 Section(header: Text("Examples")) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("RTMP: rtmp://192.168.1.100/live/stream")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                        
                         Text("SRT: srt://192.168.1.100:8888")
                             .font(.caption)
                             .foregroundColor(.gray)
                         
-                        Text("Remote: rtmp://stream.example.com/live/mykey")
+                        Text("UDP: udp://192.168.1.100:1234")
                             .font(.caption)
                             .foregroundColor(.gray)
                     }
@@ -119,9 +209,7 @@ struct ServerEditView: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
+                    Button("Cancel") { dismiss() }
                 }
                 
                 ToolbarItem(placement: .confirmationAction) {
@@ -137,11 +225,9 @@ struct ServerEditView: View {
     
     private func saveServer() {
         showValidation = true
-        
         guard isValid else { return }
         
         if let existingServer = server {
-            // Update existing server
             let updated = SRTServer(
                 id: existingServer.id,
                 name: name,
@@ -151,7 +237,6 @@ struct ServerEditView: View {
             )
             serverManager.updateServer(updated)
         } else {
-            // Add new server
             let newServer = SRTServer(
                 name: name,
                 url: url,

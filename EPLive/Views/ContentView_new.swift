@@ -11,7 +11,7 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var viewModel = StreamViewModel()
     @State private var showSettings = false
-    @State private var showSourcePicker = false
+    @State private var showSourceSelection = false
     @State private var lastZoomScale: CGFloat = 1.0
     
     var body: some View {
@@ -20,6 +20,7 @@ struct ContentView: View {
                 // Camera Preview - Full screen
                 if viewModel.isPreviewVisible {
                     CameraPreviewView(viewModel: viewModel)
+                        .rotationEffect(.degrees(viewModel.streamingSettings.cameraRotation.angle))
                         .ignoresSafeArea()
                         #if os(iOS)
                         .gesture(
@@ -58,8 +59,7 @@ struct ContentView: View {
                         isStreaming: viewModel.isStreaming,
                         serverName: viewModel.currentServer?.name,
                         quality: viewModel.selectedQuality,
-                        showSettings: $showSettings,
-                        showSourcePicker: $showSourcePicker
+                        showSettings: $showSettings
                     )
                     
                     Spacer()
@@ -83,6 +83,7 @@ struct ContentView: View {
                     
                     // Bottom controls - camera style
                     BottomControlsView(
+                        viewModel: viewModel,
                         isStreaming: viewModel.isStreaming,
                         isPreviewVisible: viewModel.isPreviewVisible,
                         onRecord: {
@@ -100,11 +101,19 @@ struct ContentView: View {
                             viewModel.resetZoom()
                             lastZoomScale = 1.0
                         },
+                        onRotate: {
+                            // Ruota di 90 gradi in senso orario
+                            let currentIndex = CameraRotation.allCases.firstIndex(of: viewModel.streamingSettings.cameraRotation) ?? 0
+                            let nextIndex = (currentIndex + 1) % CameraRotation.allCases.count
+                            viewModel.streamingSettings.cameraRotation = CameraRotation.allCases[nextIndex]
+                        },
                         onTorch: {
+                            viewModel.streamingSettings.enableTorch.toggle()
                             viewModel.toggleTorch()
                         },
                         isTorchOn: viewModel.streamingSettings.enableTorch,
-                        isTorchAvailable: viewModel.isTorchAvailable
+                        isTorchAvailable: viewModel.isTorchAvailable,
+                        showSourceSelection: $showSourceSelection
                     )
                 }
             }
@@ -115,10 +124,9 @@ struct ContentView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView(viewModel: viewModel)
         }
-        // TODO: Fix SourcePickerView compilation errors
-        // .sheet(isPresented: $showSourcePicker) {
-        //     SourcePickerView(viewModel: viewModel)
-        // }
+        .sheet(isPresented: $showSourceSelection) {
+            SourceSelectionView(viewModel: viewModel)
+        }
         .alert("Errore", isPresented: $viewModel.showError) {
             Button("OK") {
                 viewModel.showError = false
@@ -217,7 +225,6 @@ struct TopBarView: View {
     let serverName: String?
     let quality: VideoQuality
     @Binding var showSettings: Bool
-    @Binding var showSourcePicker: Bool
     @State private var streamingTime: TimeInterval = 0
     @State private var timer: Timer?
     
@@ -276,17 +283,6 @@ struct TopBarView: View {
                 .cornerRadius(4)
             }
             
-            // Source picker button
-            Button(action: { showSourcePicker = true }) {
-                Image(systemName: "photo.on.rectangle.angled")
-                    .font(.system(size: 18))
-                    .foregroundColor(.white)
-                    .padding(10)
-                    .background(Color.black.opacity(0.5))
-                    .clipShape(Circle())
-            }
-            .buttonStyle(.plain)
-            
             // Settings button
             Button(action: { showSettings = true }) {
                 Image(systemName: "gearshape.fill")
@@ -326,19 +322,35 @@ struct TopBarView: View {
 
 // MARK: - Bottom Controls View (camera style)
 struct BottomControlsView: View {
+    @ObservedObject var viewModel: StreamViewModel
     let isStreaming: Bool
     let isPreviewVisible: Bool
     let onRecord: () -> Void
     let onTogglePreview: () -> Void
     let onSwitchCamera: () -> Void
+    let onRotate: () -> Void
     let onTorch: () -> Void
     let isTorchOn: Bool
     let isTorchAvailable: Bool
+    @Binding var showSourceSelection: Bool
     
     var body: some View {
         HStack(spacing: 0) {
-            // Left side - Preview toggle & Torch
+            // Left side - Source Selection & Preview toggle
             HStack(spacing: 20) {
+                // Source selection button
+                Button(action: { showSourceSelection = true }) {
+                    VStack(spacing: 4) {
+                        Image(systemName: sourceIcon)
+                            .font(.system(size: 24))
+                        Text(sourceLabel)
+                            .font(.system(size: 9, weight: .medium))
+                    }
+                    .foregroundColor(.white)
+                    .frame(width: 50, height: 50)
+                }
+                .buttonStyle(.plain)
+                
                 // Preview toggle (eye)
                 Button(action: onTogglePreview) {
                     VStack(spacing: 4) {
@@ -395,8 +407,23 @@ struct BottomControlsView: View {
             }
             .buttonStyle(.plain)
             
-            // Right side - Switch Camera
+            // Right side - Rotate & Switch Camera
             HStack(spacing: 20) {
+                // Rotate button
+                Button(action: onRotate) {
+                    VStack(spacing: 4) {
+                        Image(systemName: "rotate.right.fill")
+                            .font(.system(size: 24))
+                        Text("RUOTA")
+                            .font(.system(size: 9, weight: .medium))
+                    }
+                    .foregroundColor(.white)
+                    .frame(width: 50, height: 50)
+                }
+                .buttonStyle(.plain)
+                
+                Spacer()
+                
                 #if os(iOS)
                 // Switch camera - only on iOS devices with multiple cameras
                 Button(action: onSwitchCamera) {
@@ -423,6 +450,28 @@ struct BottomControlsView: View {
                 endPoint: .bottom
             )
         )
+    }
+    
+    private var sourceIcon: String {
+        switch viewModel.currentSourceType {
+        case .camera:
+            return "video.fill"
+        case .screen:
+            return "tv.fill"
+        case .window:
+            return "macwindow"
+        }
+    }
+    
+    private var sourceLabel: String {
+        switch viewModel.currentSourceType {
+        case .camera:
+            return "CAM"
+        case .screen:
+            return "SCHERMO"
+        case .window:
+            return "FINESTRA"
+        }
     }
 }
 

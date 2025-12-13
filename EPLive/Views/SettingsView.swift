@@ -2,8 +2,6 @@
 //  SettingsView.swift
 //  EPLive
 //
-//  Created on 12/12/2025.
-//
 
 import SwiftUI
 import AVFoundation
@@ -15,24 +13,190 @@ struct SettingsView: View {
     @State private var showAdvanced = false
     
     var body: some View {
+        #if os(macOS)
+        macOSSettings
+        #else
+        iOSSettings
+        #endif
+    }
+    
+    // MARK: - macOS Settings
+    #if os(macOS)
+    private var macOSSettings: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Impostazioni")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                Spacer()
+                Button("Fine") {
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding()
+            .background(Color(NSColor.windowBackgroundColor))
+            
+            Divider()
+            
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    // Server
+                    GroupBox(label: Label("SRT Server", systemImage: "server.rack")) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            if let server = viewModel.currentServer {
+                                ServerInfoRow(server: server)
+                            } else {
+                                Text("Nessun server selezionato")
+                                    .foregroundColor(.gray)
+                            }
+                            Button(action: { showServerList = true }) {
+                                Label("Gestisci Server", systemImage: "folder")
+                            }
+                            .disabled(viewModel.isStreaming)
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    
+                    // Video
+                    GroupBox(label: Label("Video", systemImage: "video")) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Picker("Risoluzione", selection: $viewModel.selectedQuality) {
+                                ForEach(VideoQuality.allCases) { quality in
+                                    Text(quality.displayName).tag(quality)
+                                }
+                            }
+                            .disabled(viewModel.isStreaming)
+                            
+                            Picker("Frame Rate", selection: $viewModel.streamingSettings.selectedFPS) {
+                                ForEach(FPSOption.allCases) { fps in
+                                    Text(fps.displayName).tag(fps)
+                                }
+                            }
+                            .disabled(viewModel.isStreaming)
+                            
+                            Toggle("Bitrate Personalizzato", isOn: $viewModel.streamingSettings.useCustomBitrate)
+                                .disabled(viewModel.isStreaming)
+                            
+                            if viewModel.streamingSettings.useCustomBitrate {
+                                HStack {
+                                    Text("Bitrate")
+                                    Spacer()
+                                    Text(viewModel.streamingSettings.bitrateFormatted)
+                                        .foregroundColor(.secondary)
+                                }
+                                Slider(value: $viewModel.streamingSettings.bitrateInMbps, in: 0.5...25, step: 0.5)
+                                    .disabled(viewModel.isStreaming)
+                            }
+                            
+                            Picker("Profilo H.264", selection: $viewModel.streamingSettings.h264Profile) {
+                                ForEach(H264Profile.allCases) { profile in
+                                    Text(profile.rawValue).tag(profile)
+                                }
+                            }
+                            .disabled(viewModel.isStreaming)
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    
+                    // Audio
+                    GroupBox(label: Label("Audio", systemImage: "speaker.wave.2")) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Toggle("Abilita Audio", isOn: $viewModel.streamingSettings.enableAudio)
+                                .disabled(viewModel.isStreaming)
+                            
+                            if viewModel.streamingSettings.enableAudio {
+                                Picker("Bitrate Audio", selection: $viewModel.streamingSettings.audioBitrate) {
+                                    ForEach(AudioBitrate.allCases) { bitrate in
+                                        Text(bitrate.displayName).tag(bitrate)
+                                    }
+                                }
+                                .disabled(viewModel.isStreaming)
+                            }
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    
+                    // Camera
+                    GroupBox(label: Label("Camera", systemImage: "camera")) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Picker("Seleziona Camera", selection: Binding(
+                                get: { viewModel.availableCameras.first },
+                                set: { if let camera = $0 { viewModel.selectCamera(camera) } }
+                            )) {
+                                ForEach(viewModel.availableCameras, id: \.uniqueID) { camera in
+                                    Text(camera.localizedName).tag(camera as AVCaptureDevice?)
+                                }
+                            }
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    
+                    // SRT
+                    GroupBox(label: Label("SRT", systemImage: "network")) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Picker("Latenza", selection: $viewModel.streamingSettings.srtLatency) {
+                                ForEach(SRTLatency.allCases) { latency in
+                                    Text(latency.displayName).tag(latency)
+                                }
+                            }
+                            .disabled(viewModel.isStreaming)
+                            
+                            Toggle("Crittografia", isOn: $viewModel.streamingSettings.enableEncryption)
+                                .disabled(viewModel.isStreaming)
+                            
+                            if viewModel.streamingSettings.enableEncryption {
+                                SecureField("Passphrase", text: $viewModel.streamingSettings.srtPassphrase)
+                                    .disabled(viewModel.isStreaming)
+                            }
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    
+                    // Info
+                    GroupBox(label: Label("Info", systemImage: "info.circle")) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            InfoRow(title: "Stato", value: viewModel.connectionStatus)
+                            InfoRow(title: "Permessi Camera", 
+                                   value: viewModel.cameraPermissionGranted ? "Concessi" : "Non Concessi",
+                                   valueColor: viewModel.cameraPermissionGranted ? .green : .red)
+                            InfoRow(title: "Versione", value: "1.0")
+                        }
+                        .padding(.vertical, 8)
+                    }
+                    
+                    Button(action: resetToDefaults) {
+                        Label("Ripristina Impostazioni Default", systemImage: "arrow.counterclockwise")
+                            .foregroundColor(.red)
+                    }
+                    .disabled(viewModel.isStreaming)
+                }
+                .padding(20)
+            }
+        }
+        .frame(width: 550, height: 650)
+        .sheet(isPresented: $showServerList) {
+            ServerListView(serverManager: viewModel.serverManager, selectedServer: $viewModel.currentServer)
+        }
+    }
+    #endif
+    
+    // MARK: - iOS Settings
+    private var iOSSettings: some View {
         NavigationView {
             Form {
-                // MARK: - Server Section
                 Section(header: Text("SRT Server")) {
                     if let server = viewModel.currentServer {
                         ServerInfoRow(server: server)
                     } else {
-                        Text("No server selected")
-                            .foregroundColor(.gray)
+                        Text("Nessun server selezionato").foregroundColor(.gray)
                     }
-                    
                     Button(action: { showServerList = true }) {
-                        Label("Manage Servers", systemImage: "server.rack")
+                        Label("Gestisci Server", systemImage: "server.rack")
                     }
                     .disabled(viewModel.isStreaming)
                 }
                 
-                // MARK: - Video Quality Section
                 Section(header: Text("Video")) {
                     Picker("Risoluzione", selection: $viewModel.selectedQuality) {
                         ForEach(VideoQuality.allCases) { quality in
@@ -48,53 +212,10 @@ struct SettingsView: View {
                     }
                     .disabled(viewModel.isStreaming)
                     
-                    // Bitrate
                     Toggle("Bitrate Personalizzato", isOn: $viewModel.streamingSettings.useCustomBitrate)
                         .disabled(viewModel.isStreaming)
-                    
-                    if viewModel.streamingSettings.useCustomBitrate {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text("Bitrate")
-                                Spacer()
-                                Text(viewModel.streamingSettings.bitrateFormatted)
-                                    .foregroundColor(.secondary)
-                            }
-                            Slider(
-                                value: $viewModel.streamingSettings.bitrateInMbps,
-                                in: 0.5...25,
-                                step: 0.5
-                            )
-                        }
-                        .disabled(viewModel.isStreaming)
-                    } else {
-                        HStack {
-                            Text("Bitrate")
-                            Spacer()
-                            Text("\(viewModel.selectedQuality.bitrate / 1_000_000) Mbps")
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                    
-                    Picker("Profilo H.264", selection: $viewModel.streamingSettings.h264Profile) {
-                        ForEach(H264Profile.allCases) { profile in
-                            VStack(alignment: .leading) {
-                                Text(profile.rawValue)
-                            }
-                            .tag(profile)
-                        }
-                    }
-                    .disabled(viewModel.isStreaming)
-                    
-                    Picker("Keyframe Interval", selection: $viewModel.streamingSettings.keyframeInterval) {
-                        ForEach(KeyframeInterval.allCases) { interval in
-                            Text(interval.displayName).tag(interval)
-                        }
-                    }
-                    .disabled(viewModel.isStreaming)
                 }
                 
-                // MARK: - Audio Section
                 Section(header: Text("Audio")) {
                     Toggle("Abilita Audio", isOn: $viewModel.streamingSettings.enableAudio)
                         .disabled(viewModel.isStreaming)
@@ -102,79 +223,28 @@ struct SettingsView: View {
                     if viewModel.streamingSettings.enableAudio {
                         Picker("Bitrate Audio", selection: $viewModel.streamingSettings.audioBitrate) {
                             ForEach(AudioBitrate.allCases) { bitrate in
-                                HStack {
-                                    Text(bitrate.displayName)
-                                    Spacer()
-                                    Text(bitrate.description)
-                                        .foregroundColor(.secondary)
-                                        .font(.caption)
-                                }
-                                .tag(bitrate)
-                            }
-                        }
-                        .disabled(viewModel.isStreaming)
-                        
-                        Picker("Sample Rate", selection: $viewModel.streamingSettings.audioSampleRate) {
-                            ForEach(AudioSampleRate.allCases) { rate in
-                                Text(rate.displayName).tag(rate)
+                                Text(bitrate.displayName).tag(bitrate)
                             }
                         }
                         .disabled(viewModel.isStreaming)
                     }
                 }
                 
-                // MARK: - Camera Section
                 Section(header: Text("Camera")) {
                     Picker("Seleziona Camera", selection: Binding(
                         get: { viewModel.availableCameras.first },
                         set: { if let camera = $0 { viewModel.selectCamera(camera) } }
                     )) {
                         ForEach(viewModel.availableCameras, id: \.uniqueID) { camera in
-                            Text(camera.localizedName)
-                                .tag(camera as AVCaptureDevice?)
-                        }
-                    }
-                    
-                    if viewModel.isTorchAvailable {
-                        Toggle("Torcia", isOn: Binding(
-                            get: { viewModel.streamingSettings.enableTorch },
-                            set: { newValue in
-                                viewModel.streamingSettings.enableTorch = newValue
-                                viewModel.toggleTorch()
-                            }
-                        ))
-                        
-                        if viewModel.streamingSettings.enableTorch {
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack {
-                                    Text("Intensità")
-                                    Spacer()
-                                    Text("\(Int(viewModel.streamingSettings.torchLevel * 100))%")
-                                        .foregroundColor(.secondary)
-                                }
-                                Slider(
-                                    value: Binding(
-                                        get: { viewModel.streamingSettings.torchLevel },
-                                        set: { viewModel.setTorchLevel($0) }
-                                    ),
-                                    in: 0.1...1.0
-                                )
-                            }
+                            Text(camera.localizedName).tag(camera as AVCaptureDevice?)
                         }
                     }
                 }
                 
-                // MARK: - SRT Settings Section
                 Section(header: Text("SRT")) {
                     Picker("Latenza", selection: $viewModel.streamingSettings.srtLatency) {
                         ForEach(SRTLatency.allCases) { latency in
-                            VStack(alignment: .leading) {
-                                Text(latency.displayName)
-                                Text(latency.description)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            .tag(latency)
+                            Text(latency.displayName).tag(latency)
                         }
                     }
                     .disabled(viewModel.isStreaming)
@@ -188,40 +258,14 @@ struct SettingsView: View {
                     }
                 }
                 
-                // MARK: - Advanced Section
-                Section(header: Text("Avanzate")) {
-                    Toggle("Mostra Opzioni Avanzate", isOn: $showAdvanced)
-                    
-                    if showAdvanced {
-                        Toggle("Bitrate Adattivo", isOn: $viewModel.streamingSettings.adaptiveBitrate)
-                            .disabled(viewModel.isStreaming)
-                        
-                        Toggle("Modalità Bassa Latenza", isOn: $viewModel.streamingSettings.lowLatencyMode)
-                            .disabled(viewModel.isStreaming)
-                        
-                        Toggle("Stabilizzazione Video", isOn: $viewModel.streamingSettings.enableStabilization)
-                            .disabled(viewModel.isStreaming)
-                    }
-                }
-                
-                // MARK: - Info Section
                 Section(header: Text("Informazioni")) {
                     InfoRow(title: "Stato", value: viewModel.connectionStatus)
                     InfoRow(title: "Permessi Camera", 
                            value: viewModel.cameraPermissionGranted ? "Concessi" : "Non Concessi",
                            valueColor: viewModel.cameraPermissionGranted ? .green : .red)
-                    
-                    if let server = viewModel.currentServer {
-                        InfoRow(title: "Server Valido",
-                               value: server.isValid ? "Sì" : "No",
-                               valueColor: server.isValid ? .green : .red)
-                    }
-                    
                     InfoRow(title: "Versione", value: "1.0")
-                    InfoRow(title: "Protocollo", value: "SRT / UDP")
                 }
                 
-                // MARK: - Reset Section
                 Section {
                     Button(action: resetToDefaults) {
                         Label("Ripristina Impostazioni Default", systemImage: "arrow.counterclockwise")
@@ -236,21 +280,13 @@ struct SettingsView: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Fine") {
-                        dismiss()
-                    }
+                    Button("Fine") { dismiss() }
                 }
             }
             .sheet(isPresented: $showServerList) {
-                ServerListView(
-                    serverManager: viewModel.serverManager,
-                    selectedServer: $viewModel.currentServer
-                )
+                ServerListView(serverManager: viewModel.serverManager, selectedServer: $viewModel.currentServer)
             }
         }
-        #if os(macOS)
-        .frame(minWidth: 500, minHeight: 700)
-        #endif
     }
     
     private func resetToDefaults() {
@@ -282,20 +318,11 @@ struct ServerInfoRow: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(server.name)
-                        .font(.headline)
-                    
-                    Text(server.url)
-                        .font(.subheadline)
-                        .foregroundColor(.gray)
-                    
-                    Text("\(server.bitrate / 1000) kbps")
-                        .font(.caption)
-                        .foregroundColor(.gray)
+                    Text(server.name).font(.headline)
+                    Text(server.url).font(.subheadline).foregroundColor(.gray)
+                    Text("\(server.bitrate / 1000) kbps").font(.caption).foregroundColor(.gray)
                 }
-                
                 Spacer()
-                
                 if server.isDefault {
                     Text("DEFAULT")
                         .font(.caption2)
@@ -320,8 +347,7 @@ struct InfoRow: View {
         HStack {
             Text(title)
             Spacer()
-            Text(value)
-                .foregroundColor(valueColor)
+            Text(value).foregroundColor(valueColor)
         }
     }
 }

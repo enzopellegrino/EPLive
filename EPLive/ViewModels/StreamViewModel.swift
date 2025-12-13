@@ -38,7 +38,7 @@ class StreamViewModel: ObservableObject {
     @Published var showError = false
     @Published var cameraPermissionGranted = false
     @Published var currentServer: SRTServer?
-    @Published var selectedQuality: VideoQuality = .medium
+    @Published var selectedQuality: VideoQuality = .ultra
     
     // Advanced settings
     @Published var streamingSettings = StreamingSettings()
@@ -112,9 +112,32 @@ class StreamViewModel: ObservableObject {
         // Applica anche la nuova risoluzione per l'orientamento
         applyVideoQuality()
         #else
-        // macOS: usa sempre landscape
-        stream.videoOrientation = .landscapeRight
+        // macOS: applica la rotazione basata sulle impostazioni
+        applyStreamRotation()
         #endif
+    }
+    
+    /// Applica la rotazione della camera allo stream (per il video trasmesso)
+    func applyStreamRotation() {
+        guard let stream = srtStream else { return }
+        
+        // Converti la rotazione utente in AVCaptureVideoOrientation
+        let rotation = streamingSettings.cameraRotation
+        let videoOrientation: AVCaptureVideoOrientation
+        
+        switch rotation {
+        case .rotate0:
+            videoOrientation = .portrait
+        case .rotate90:
+            videoOrientation = .landscapeRight
+        case .rotate180:
+            videoOrientation = .portraitUpsideDown
+        case .rotate270:
+            videoOrientation = .landscapeLeft
+        }
+        
+        stream.videoOrientation = videoOrientation
+        print("Applied stream rotation: \(rotation.displayName) -> orientation \(videoOrientation.rawValue)")
     }
     
     private func setupBindings() {
@@ -137,6 +160,16 @@ class StreamViewModel: ObservableObject {
             .sink { [weak self] _ in
                 Task { @MainActor in
                     self?.applyVideoQuality()
+                }
+            }
+            .store(in: &cancellables)
+        
+        // Observer per cambi di rotazione camera (iOS e macOS)
+        streamingSettings.$cameraRotation
+            .dropFirst()
+            .sink { [weak self] _ in
+                Task { @MainActor in
+                    self?.applyStreamRotation()
                 }
             }
             .store(in: &cancellables)
@@ -253,6 +286,23 @@ class StreamViewModel: ObservableObject {
         applyVideoQuality()
         
         // Attach camera for preview
+        // Su macOS, preferisci webcam esterne (hanno .unspecified position)
+        #if os(macOS)
+        let externalCamera = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.externalUnknown, .builtInWideAngleCamera],
+            mediaType: .video,
+            position: .unspecified
+        ).devices.first
+        
+        if let camera = externalCamera {
+            do {
+                try await srtStream?.attachCamera(camera)
+                print("Attached camera: \(camera.localizedName)")
+            } catch {
+                print("Error attaching camera: \(error)")
+            }
+        }
+        #else
         if let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: currentCameraPosition) {
             do {
                 try await srtStream?.attachCamera(camera)
@@ -267,9 +317,16 @@ class StreamViewModel: ObservableObject {
                 print("Error attaching camera: \(error)")
             }
         }
+        #endif
         
         // Set initial video orientation
-        updateVideoOrientation()
+        #if os(iOS)
+        // iOS: imposta sempre portrait come default iniziale
+        srtStream?.videoOrientation = .portrait
+        #else
+        // macOS: applica la rotazione dalle impostazioni
+        applyStreamRotation()
+        #endif
         
         // Attach microphone
         if let mic = AVCaptureDevice.default(for: .audio) {
@@ -375,6 +432,7 @@ class StreamViewModel: ObservableObject {
     
     func switchCamera() {
         Task {
+            #if os(iOS)
             // Toggle between front and back camera
             let newPosition: AVCaptureDevice.Position = (currentCameraPosition == .back) ? .front : .back
             
@@ -387,10 +445,28 @@ class StreamViewModel: ObservableObject {
                     if newPosition == .front {
                         streamingSettings.enableTorch = false
                     }
+                    
+                    print("Switched to \(newPosition == .front ? "front" : "back") camera")
                 } catch {
                     print("Error switching camera: \(error)")
                 }
             }
+            #else
+            // macOS: cycle through available cameras
+            let cameras = availableCameras
+            if let currentIndex = cameras.firstIndex(where: { $0.position == currentCameraPosition || currentCameraPosition == .unspecified }) {
+                let nextIndex = (currentIndex + 1) % cameras.count
+                let nextCamera = cameras[nextIndex]
+                do {
+                    try await srtStream?.attachCamera(nextCamera)
+                    currentCameraPosition = nextCamera.position
+                    applyStreamRotation()
+                    print("Switched to camera: \(nextCamera.localizedName)")
+                } catch {
+                    print("Error switching camera: \(error)")
+                }
+            }
+            #endif
         }
     }
     
@@ -428,45 +504,89 @@ class StreamViewModel: ObservableObject {
     // MARK: - Torch Control
     
     func toggleTorch() {
-        guard currentCameraPosition == .back,
-              let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
-              camera.hasTorch else { return }
+        #if os(iOS)
+        guard currentCameraPosition == .back else {
+            streamingSettings.enableTorch = false
+            return
+        }
+        
+        // Trova la camera attiva
+        let camera: AVCaptureDevice?
+        if let triple = AVCaptureDevice.default(.builtInTripleCamera, for: .video, position: .back) {
+            camera = triple
+        } else if let dual = AVCaptureDevice.default(.builtInDualWideCamera, for: .video, position: .back) {
+            camera = dual
+        } else {
+            camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+        }
+        
+        guard let device = camera, device.hasTorch else {
+            streamingSettings.enableTorch = false
+            return
+        }
         
         do {
-            try camera.lockForConfiguration()
-            if streamingSettings.enableTorch {
-                try camera.setTorchModeOn(level: streamingSettings.torchLevel)
+            try device.lockForConfiguration()
+            
+            if device.torchMode == .off {
+                try device.setTorchModeOn(level: streamingSettings.torchLevel)
+                streamingSettings.enableTorch = true
             } else {
-                camera.torchMode = .off
+                device.torchMode = .off
+                streamingSettings.enableTorch = false
             }
-            camera.unlockForConfiguration()
+            
+            device.unlockForConfiguration()
         } catch {
             print("Error toggling torch: \(error)")
+            // Sincronizza lo stato con il dispositivo reale
+            streamingSettings.enableTorch = device.torchMode != .off
         }
+        #endif
     }
     
     func setTorchLevel(_ level: Float) {
+        #if os(iOS)
         guard currentCameraPosition == .back,
-              let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
-              camera.hasTorch,
               streamingSettings.enableTorch else { return }
         
+        let camera: AVCaptureDevice?
+        if let triple = AVCaptureDevice.default(.builtInTripleCamera, for: .video, position: .back) {
+            camera = triple
+        } else if let dual = AVCaptureDevice.default(.builtInDualWideCamera, for: .video, position: .back) {
+            camera = dual
+        } else {
+            camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+        }
+        
+        guard let device = camera, device.hasTorch else { return }
+        
         do {
-            try camera.lockForConfiguration()
-            try camera.setTorchModeOn(level: level)
-            camera.unlockForConfiguration()
+            try device.lockForConfiguration()
+            try device.setTorchModeOn(level: level)
+            device.unlockForConfiguration()
             streamingSettings.torchLevel = level
         } catch {
             print("Error setting torch level: \(error)")
         }
+        #endif
     }
     
     var isTorchAvailable: Bool {
-        guard currentCameraPosition == .back,
-              let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
-            return false
+        #if os(iOS)
+        guard currentCameraPosition == .back else { return false }
+        
+        if let triple = AVCaptureDevice.default(.builtInTripleCamera, for: .video, position: .back) {
+            return triple.hasTorch
+        } else if let dual = AVCaptureDevice.default(.builtInDualWideCamera, for: .video, position: .back) {
+            return dual.hasTorch
+        } else if let wide = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) {
+            return wide.hasTorch
         }
-        return camera.hasTorch
+        return false
+        #else
+        return false
+        #endif
     }
     
     // MARK: - Zoom Control
@@ -475,10 +595,20 @@ class StreamViewModel: ObservableObject {
     
     var minZoomFactor: CGFloat {
         #if os(iOS)
-        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: currentCameraPosition) else {
-            return 1.0
+        // Usa virtual device per supportare zoom sotto 1x (ultra-wide 0.5x)
+        let camera: AVCaptureDevice?
+        if currentCameraPosition == .back {
+            if let triple = AVCaptureDevice.default(.builtInTripleCamera, for: .video, position: .back) {
+                camera = triple
+            } else if let dual = AVCaptureDevice.default(.builtInDualWideCamera, for: .video, position: .back) {
+                camera = dual
+            } else {
+                camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+            }
+        } else {
+            camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
         }
-        return camera.minAvailableVideoZoomFactor
+        return camera?.minAvailableVideoZoomFactor ?? 1.0
         #else
         return 1.0
         #endif
@@ -486,11 +616,20 @@ class StreamViewModel: ObservableObject {
     
     var maxZoomFactor: CGFloat {
         #if os(iOS)
-        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: currentCameraPosition) else {
-            return 1.0
+        let camera: AVCaptureDevice?
+        if currentCameraPosition == .back {
+            if let triple = AVCaptureDevice.default(.builtInTripleCamera, for: .video, position: .back) {
+                camera = triple
+            } else if let dual = AVCaptureDevice.default(.builtInDualWideCamera, for: .video, position: .back) {
+                camera = dual
+            } else {
+                camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+            }
+        } else {
+            camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
         }
-        // Limita a 10x per evitare zoom eccessivo
-        return min(camera.maxAvailableVideoZoomFactor, 10.0)
+        // Limita a 15x per evitare zoom eccessivo (iPhone supporta fino a 15x)
+        return min(camera?.maxAvailableVideoZoomFactor ?? 1.0, 15.0)
         #else
         return 1.0
         #endif
@@ -498,16 +637,27 @@ class StreamViewModel: ObservableObject {
     
     func setZoom(_ factor: CGFloat) {
         #if os(iOS)
-        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: currentCameraPosition) else {
-            return
+        let camera: AVCaptureDevice?
+        if currentCameraPosition == .back {
+            if let triple = AVCaptureDevice.default(.builtInTripleCamera, for: .video, position: .back) {
+                camera = triple
+            } else if let dual = AVCaptureDevice.default(.builtInDualWideCamera, for: .video, position: .back) {
+                camera = dual
+            } else {
+                camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+            }
+        } else {
+            camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
         }
         
-        let clampedFactor = max(minZoomFactor, min(factor, maxZoomFactor))
+        guard let device = camera else { return }
+        
+        let clampedFactor = max(device.minAvailableVideoZoomFactor, min(factor, min(device.maxAvailableVideoZoomFactor, 15.0)))
         
         do {
-            try camera.lockForConfiguration()
-            camera.videoZoomFactor = clampedFactor
-            camera.unlockForConfiguration()
+            try device.lockForConfiguration()
+            device.videoZoomFactor = clampedFactor
+            device.unlockForConfiguration()
             currentZoomFactor = clampedFactor
         } catch {
             print("Error setting zoom: \(error)")
