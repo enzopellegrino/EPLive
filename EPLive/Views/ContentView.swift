@@ -1,0 +1,405 @@
+//
+//  ContentView.swift
+//  EPLive
+//
+//  Created on 12/12/2025.
+//  Professional camera-style interface
+//
+
+import SwiftUI
+
+struct ContentView: View {
+    @StateObject private var viewModel = StreamViewModel()
+    @State private var showSettings = false
+    @State private var lastZoomScale: CGFloat = 1.0
+    
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                // Camera Preview - Full screen
+                if viewModel.isPreviewVisible {
+                    CameraPreviewView(viewModel: viewModel)
+                        .ignoresSafeArea()
+                        .gesture(
+                            MagnificationGesture()
+                                .onChanged { scale in
+                                    let newZoom = lastZoomScale * scale
+                                    viewModel.setZoom(newZoom)
+                                }
+                                .onEnded { _ in
+                                    lastZoomScale = viewModel.currentZoomFactor
+                                }
+                        )
+                } else {
+                    // Black screen quando preview disabilitato
+                    Color.black
+                        .ignoresSafeArea()
+                    
+                    VStack(spacing: 16) {
+                        Image(systemName: "eye.slash.fill")
+                            .font(.system(size: 60))
+                            .foregroundColor(.gray)
+                        Text("Preview Disabilitato")
+                            .font(.headline)
+                            .foregroundColor(.gray)
+                        Text("Lo streaming continua in background")
+                            .font(.caption)
+                            .foregroundColor(.gray.opacity(0.7))
+                    }
+                }
+                
+                // Camera overlay UI
+                VStack(spacing: 0) {
+                    // Top bar - minimal info
+                    TopBarView(
+                        isStreaming: viewModel.isStreaming,
+                        serverName: viewModel.currentServer?.name,
+                        quality: viewModel.selectedQuality,
+                        showSettings: $showSettings
+                    )
+                    
+                    Spacer()
+                    
+                    // Zoom slider (right side)
+                    if viewModel.isPreviewVisible && viewModel.maxZoomFactor > 1.0 {
+                        ZoomSliderView(
+                            currentZoom: $viewModel.currentZoomFactor,
+                            minZoom: viewModel.minZoomFactor,
+                            maxZoom: viewModel.maxZoomFactor,
+                            onZoomChange: { viewModel.setZoom($0) },
+                            onReset: { viewModel.resetZoom(); lastZoomScale = 1.0 }
+                        )
+                        .padding(.trailing, 16)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    }
+                    
+                    Spacer()
+                    
+                    // Bottom controls - camera style
+                    BottomControlsView(
+                        isStreaming: viewModel.isStreaming,
+                        isPreviewVisible: viewModel.isPreviewVisible,
+                        onRecord: {
+                            if viewModel.isStreaming {
+                                viewModel.stopStreaming()
+                            } else {
+                                viewModel.startStreaming()
+                            }
+                        },
+                        onTogglePreview: {
+                            viewModel.isPreviewVisible.toggle()
+                        },
+                        onSwitchCamera: {
+                            viewModel.switchCamera()
+                            viewModel.resetZoom()
+                            lastZoomScale = 1.0
+                        },
+                        onTorch: {
+                            viewModel.streamingSettings.enableTorch.toggle()
+                            viewModel.toggleTorch()
+                        },
+                        isTorchOn: viewModel.streamingSettings.enableTorch,
+                        isTorchAvailable: viewModel.isTorchAvailable
+                    )
+                }
+            }
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView(viewModel: viewModel)
+        }
+        .alert("Errore", isPresented: $viewModel.showError) {
+            Button("OK") {
+                viewModel.showError = false
+            }
+        } message: {
+            Text(viewModel.errorMessage ?? "Errore sconosciuto")
+        }
+        #if os(iOS)
+        .statusBar(hidden: true)
+        #endif
+    }
+}
+
+// MARK: - Zoom Slider View
+struct ZoomSliderView: View {
+    @Binding var currentZoom: CGFloat
+    let minZoom: CGFloat
+    let maxZoom: CGFloat
+    let onZoomChange: (CGFloat) -> Void
+    let onReset: () -> Void
+    
+    var body: some View {
+        VStack(spacing: 8) {
+            // Zoom value indicator
+            Text(String(format: "%.1fx", currentZoom))
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundColor(.white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.black.opacity(0.6))
+                .cornerRadius(4)
+            
+            // Vertical slider
+            ZStack {
+                // Track background
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(Color.white.opacity(0.3))
+                    .frame(width: 6, height: 150)
+                
+                // Progress fill
+                VStack {
+                    Spacer()
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Color.white)
+                        .frame(width: 6, height: progressHeight)
+                }
+                .frame(height: 150)
+                
+                // Tick marks
+                VStack(spacing: 0) {
+                    ForEach(0..<5) { i in
+                        Rectangle()
+                            .fill(Color.white.opacity(0.5))
+                            .frame(width: 12, height: 1)
+                        if i < 4 {
+                            Spacer()
+                        }
+                    }
+                }
+                .frame(height: 150)
+            }
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let height: CGFloat = 150
+                        let y = max(0, min(height, height - value.location.y))
+                        let progress = y / height
+                        let newZoom = minZoom + (maxZoom - minZoom) * progress
+                        onZoomChange(newZoom)
+                    }
+            )
+            
+            // Reset button
+            Button(action: onReset) {
+                Image(systemName: "1.circle.fill")
+                    .font(.system(size: 24))
+                    .foregroundColor(.white.opacity(0.8))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 8)
+        .background(Color.black.opacity(0.4))
+        .cornerRadius(20)
+    }
+    
+    private var progressHeight: CGFloat {
+        let progress = (currentZoom - minZoom) / (maxZoom - minZoom)
+        return max(6, 150 * progress)
+    }
+}
+
+// MARK: - Top Bar View (minimal)
+struct TopBarView: View {
+    let isStreaming: Bool
+    let serverName: String?
+    let quality: VideoQuality
+    @Binding var showSettings: Bool
+    @State private var streamingTime: TimeInterval = 0
+    @State private var timer: Timer?
+    
+    var body: some View {
+        HStack {
+            // Streaming indicator
+            HStack(spacing: 8) {
+                // LIVE dot
+                Circle()
+                    .fill(isStreaming ? Color.red : Color.gray.opacity(0.5))
+                    .frame(width: 12, height: 12)
+                    .overlay(
+                        Circle()
+                            .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                    )
+                
+                if isStreaming {
+                    Text("LIVE")
+                        .font(.system(size: 14, weight: .bold, design: .monospaced))
+                        .foregroundColor(.red)
+                    
+                    Text(formatTime(streamingTime))
+                        .font(.system(size: 14, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Color.black.opacity(0.5))
+            .cornerRadius(6)
+            
+            Spacer()
+            
+            // Quality badge
+            Text(quality.rawValue)
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundColor(.white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.black.opacity(0.5))
+                .cornerRadius(4)
+            
+            // Server indicator
+            if let server = serverName {
+                HStack(spacing: 4) {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .font(.system(size: 10))
+                    Text(server)
+                        .font(.system(size: 11))
+                        .lineLimit(1)
+                }
+                .foregroundColor(isStreaming ? .green : .gray)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.black.opacity(0.5))
+                .cornerRadius(4)
+            }
+            
+            // Settings button
+            Button(action: { showSettings = true }) {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 18))
+                    .foregroundColor(.white)
+                    .padding(10)
+                    .background(Color.black.opacity(0.5))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .onChange(of: isStreaming) { streaming in
+            if streaming {
+                streamingTime = 0
+                timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+                    streamingTime += 1
+                }
+            } else {
+                timer?.invalidate()
+                timer = nil
+            }
+        }
+    }
+    
+    private func formatTime(_ time: TimeInterval) -> String {
+        let hours = Int(time) / 3600
+        let minutes = (Int(time) % 3600) / 60
+        let seconds = Int(time) % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+        }
+        return String(format: "%02d:%02d", minutes, seconds)
+    }
+}
+
+// MARK: - Bottom Controls View (camera style)
+struct BottomControlsView: View {
+    let isStreaming: Bool
+    let isPreviewVisible: Bool
+    let onRecord: () -> Void
+    let onTogglePreview: () -> Void
+    let onSwitchCamera: () -> Void
+    let onTorch: () -> Void
+    let isTorchOn: Bool
+    let isTorchAvailable: Bool
+    
+    var body: some View {
+        HStack(spacing: 0) {
+            // Left side - Preview toggle & Torch
+            HStack(spacing: 20) {
+                // Preview toggle (eye)
+                Button(action: onTogglePreview) {
+                    VStack(spacing: 4) {
+                        Image(systemName: isPreviewVisible ? "eye.fill" : "eye.slash.fill")
+                            .font(.system(size: 24))
+                        Text(isPreviewVisible ? "ON" : "OFF")
+                            .font(.system(size: 9, weight: .medium))
+                    }
+                    .foregroundColor(isPreviewVisible ? .white : .gray)
+                    .frame(width: 50, height: 50)
+                }
+                .buttonStyle(.plain)
+                
+                // Torch
+                if isTorchAvailable {
+                    Button(action: onTorch) {
+                        VStack(spacing: 4) {
+                            Image(systemName: isTorchOn ? "flashlight.on.fill" : "flashlight.off.fill")
+                                .font(.system(size: 24))
+                            Text(isTorchOn ? "ON" : "OFF")
+                                .font(.system(size: 9, weight: .medium))
+                        }
+                        .foregroundColor(isTorchOn ? .yellow : .gray)
+                        .frame(width: 50, height: 50)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            
+            // Center - Main record button (camera style)
+            Button(action: onRecord) {
+                ZStack {
+                    // Outer ring
+                    Circle()
+                        .stroke(Color.white, lineWidth: 4)
+                        .frame(width: 80, height: 80)
+                    
+                    // Inner button
+                    if isStreaming {
+                        // Stop square when recording
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.red)
+                            .frame(width: 32, height: 32)
+                    } else {
+                        // Red circle when not recording
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 64, height: 64)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            
+            // Right side - Switch camera
+            HStack(spacing: 20) {
+                Spacer()
+                
+                // Switch camera
+                Button(action: onSwitchCamera) {
+                    VStack(spacing: 4) {
+                        Image(systemName: "arrow.triangle.2.circlepath.camera.fill")
+                            .font(.system(size: 24))
+                        Text("FLIP")
+                            .font(.system(size: 9, weight: .medium))
+                    }
+                    .foregroundColor(.white)
+                    .frame(width: 50, height: 50)
+                }
+                .buttonStyle(.plain)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 20)
+        .background(
+            LinearGradient(
+                gradient: Gradient(colors: [Color.clear, Color.black.opacity(0.7)]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+    }
+}
+
+#Preview {
+    ContentView()
+}

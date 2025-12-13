@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="100%" style="stop-color:#0f0f23"/>
+    </linearGradient>
+    <linearGradient id="redGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ff4757"/>
+      <stop offset="100%" style="stop-color:#e63946"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="1024" height="1024" rx="224" ry="224" fill="url(#bgGrad)"/>
+  
+  <!-- Cerchio rosso centrale -->
+  <circle cx="512" cy="460" r="300" fill="url(#redGrad)"/>
+  
+  <!-- Simbolo Play bianco -->
+  <path d="M 440 320 L 640 460 L 440 600 Z" fill="#ffffff"/>
+  
+  <!-- Testo LIVE -->
+  <text x="512" y="850" font-family="Helvetica Neue, Arial, sans-serif" font-size="140" font-weight="900" 
+        fill="#ffffff" text-anchor="middle" letter-spacing="12">LIVE</text>
+  
+  <!-- Dot rosso -->
+  <circle cx="270" cy="815" r="28" fill="#ff4757"/>
+</svg>
