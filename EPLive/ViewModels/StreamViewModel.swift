@@ -141,6 +141,13 @@ class StreamViewModel: ObservableObject {
     }
     
     private func setupBindings() {
+        // Propaga i cambiamenti di StreamingSettings verso la ViewModel
+        streamingSettings.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+
         serverManager.$servers
             .sink { [weak self] servers in
                 Task { @MainActor in
@@ -303,9 +310,11 @@ class StreamViewModel: ObservableObject {
             }
         }
         #else
-        if let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: currentCameraPosition) {
+        // iOS: usa la camera migliore (triple > dual > wide) per supportare zoom 0.5x-15x
+        if let camera = getBestCamera(for: currentCameraPosition) {
             do {
                 try await srtStream?.attachCamera(camera)
+                calibrateZoomScale()
                 
                 // Apply torch if enabled
                 if streamingSettings.enableTorch && camera.hasTorch {
@@ -313,6 +322,22 @@ class StreamViewModel: ObservableObject {
                     try camera.setTorchModeOn(level: streamingSettings.torchLevel)
                     camera.unlockForConfiguration()
                 }
+                // Imposta zoom iniziale a 1x reale (wide lens)
+                // Su virtual device (triple/dual), raw 2.0 = wide 1x
+                // Su device normali, raw 1.0 = wide 1x
+                do {
+                    try camera.lockForConfiguration()
+                    let isVirtualDevice = camera.deviceType == .builtInTripleCamera || camera.deviceType == .builtInDualWideCamera
+                    let targetZoom: CGFloat = isVirtualDevice ? 2.0 : 1.0
+                    camera.videoZoomFactor = Swift.max(camera.minAvailableVideoZoomFactor, Swift.min(targetZoom, camera.maxAvailableVideoZoomFactor))
+                    camera.unlockForConfiguration()
+                    currentZoomFactor = camera.videoZoomFactor
+                } catch {
+                    print("Error setting initial zoom: \(error)")
+                    setupInitialZoom()
+                }
+                
+                print("Attached camera: \(camera.localizedName)")
             } catch {
                 print("Error attaching camera: \(error)")
             }
@@ -436,17 +461,31 @@ class StreamViewModel: ObservableObject {
             // Toggle between front and back camera
             let newPosition: AVCaptureDevice.Position = (currentCameraPosition == .back) ? .front : .back
             
-            if let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: newPosition) {
+            // Usa la camera migliore (triple/dual/wide) per supportare zoom 0.5x-15x
+            if let camera = getBestCamera(for: newPosition) {
                 do {
                     try await srtStream?.attachCamera(camera)
                     currentCameraPosition = newPosition
+                    calibrateZoomScale()
+                    // Dopo flip, imposta 1x reale (wide lens)
+                    do {
+                        try camera.lockForConfiguration()
+                        let isVirtualDevice = camera.deviceType == .builtInTripleCamera || camera.deviceType == .builtInDualWideCamera
+                        let targetZoom: CGFloat = isVirtualDevice ? 2.0 : 1.0
+                        camera.videoZoomFactor = Swift.max(camera.minAvailableVideoZoomFactor, Swift.min(targetZoom, camera.maxAvailableVideoZoomFactor))
+                        camera.unlockForConfiguration()
+                        currentZoomFactor = camera.videoZoomFactor
+                    } catch {
+                        print("Error setting zoom after flip: \(error)")
+                        setupInitialZoom()
+                    }
                     
                     // Torch is only available on back camera
                     if newPosition == .front {
                         streamingSettings.enableTorch = false
                     }
                     
-                    print("Switched to \(newPosition == .front ? "front" : "back") camera")
+                    print("Switched to \(newPosition == .front ? "front" : "back") camera: \(camera.localizedName)")
                 } catch {
                     print("Error switching camera: \(error)")
                 }
@@ -487,6 +526,25 @@ class StreamViewModel: ObservableObject {
             mediaType: .video,
             position: .unspecified
         ).devices
+        #endif
+    }
+    
+    /// Ottiene la camera migliore per la posizione specificata (triple > dual > wide)
+    /// Questo permette lo zoom continuo da 0.5x a 15x sui dispositivi supportati
+    private func getBestCamera(for position: AVCaptureDevice.Position) -> AVCaptureDevice? {
+        #if os(iOS)
+        // Preferiamo le virtual device cameras che supportano lo zoom continuo
+        // incluso il passaggio automatico tra le lenti
+        if let triple = AVCaptureDevice.default(.builtInTripleCamera, for: .video, position: position) {
+            return triple
+        }
+        if let dual = AVCaptureDevice.default(.builtInDualWideCamera, for: .video, position: position) {
+            return dual
+        }
+        // Fallback alla wide angle camera standard
+        return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position)
+        #else
+        return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position)
         #endif
     }
     
@@ -592,6 +650,8 @@ class StreamViewModel: ObservableObject {
     // MARK: - Zoom Control
     
     @Published var currentZoomFactor: CGFloat = 1.0
+    // Scala di visualizzazione: usa i valori raw (1.0 = 1x)
+    @Published var zoomDisplayScale: CGFloat = 1.0
     
     var minZoomFactor: CGFloat {
         #if os(iOS)
@@ -608,7 +668,8 @@ class StreamViewModel: ObservableObject {
         } else {
             camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
         }
-        return camera?.minAvailableVideoZoomFactor ?? 1.0
+        let minRaw = camera?.minAvailableVideoZoomFactor ?? 1.0
+        return minRaw
         #else
         return 1.0
         #endif
@@ -664,6 +725,36 @@ class StreamViewModel: ObservableObject {
         }
         #endif
     }
+
+    private func calibrateZoomScale() {
+        #if os(iOS)
+        // Su virtual device (triple/dual camera), raw 2.0 = 1x visuale, quindi scala = 0.5
+        // Su device normali, raw 1.0 = 1x visuale, scala = 1.0
+        if let camera = getBestCamera(for: currentCameraPosition) {
+            let isVirtualDevice = camera.deviceType == .builtInTripleCamera || camera.deviceType == .builtInDualWideCamera
+            zoomDisplayScale = isVirtualDevice ? 0.5 : 1.0
+        } else {
+            zoomDisplayScale = 1.0
+        }
+        #else
+        zoomDisplayScale = 1.0
+        #endif
+    }
+
+    /// Imposta lo zoom iniziale in modo che la lente wide corrisponda a 1x visuale
+    private func setupInitialZoom() {
+        #if os(iOS)
+        // Su virtual device, imposta raw 2.0 per avere 1x visuale
+        // Su device normali, imposta raw 1.0
+        if let camera = getBestCamera(for: currentCameraPosition) {
+            let isVirtualDevice = camera.deviceType == .builtInTripleCamera || camera.deviceType == .builtInDualWideCamera
+            let targetRaw: CGFloat = isVirtualDevice ? 2.0 : 1.0
+            setZoom(targetRaw)
+        } else {
+            setZoom(1.0)
+        }
+        #endif
+    }
     
     func handlePinchZoom(scale: CGFloat) {
         let newZoom = currentZoomFactor * scale
@@ -671,6 +762,17 @@ class StreamViewModel: ObservableObject {
     }
     
     func resetZoom() {
-        setZoom(1.0)
+        // Imposta 1x "visuale" (wide), mappato su fattore raw
+        setupInitialZoom()
+    }
+
+    // MARK: - Zoom Display mapping
+    func setZoomDisplay(_ displayFactor: CGFloat) {
+        let raw = displayFactor / max(zoomDisplayScale, 0.0001)
+        setZoom(raw)
+    }
+    
+    var currentDisplayZoomFactor: CGFloat {
+        currentZoomFactor * zoomDisplayScale
     }
 }

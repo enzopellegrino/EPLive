@@ -16,7 +16,7 @@ struct ContentView: View {
     
     var body: some View {
         GeometryReader { geometry in
-            ZStack {
+            ZStack(alignment: .bottomTrailing) {
                 // Camera Preview - Full screen
                 if viewModel.isPreviewVisible {
                     CameraPreviewView(viewModel: viewModel)
@@ -31,6 +31,21 @@ struct ContentView: View {
                                 .onEnded { _ in
                                     lastZoomScale = viewModel.currentZoomFactor
                                 }
+                        )
+                        .simultaneousGesture(
+                            TapGesture(count: 2).onEnded {
+                                // Toggle 1x <-> 2x (se supportato); altrimenti resta su 1x
+                                let minZ = viewModel.minZoomFactor
+                                let maxZ = viewModel.maxZoomFactor
+                                let target: CGFloat
+                                if abs(viewModel.currentZoomFactor - 2.0) < 0.01 || 2.0 > maxZ {
+                                    target = 1.0
+                                } else {
+                                    target = min(max(2.0, minZ), maxZ)
+                                }
+                                viewModel.setZoom(target)
+                                lastZoomScale = viewModel.currentZoomFactor
+                            }
                         )
                         #endif
                 } else {
@@ -65,18 +80,7 @@ struct ContentView: View {
                     Spacer()
                     
                     #if os(iOS)
-                    // Zoom slider (right side) - iOS only
-                    if viewModel.isPreviewVisible && viewModel.maxZoomFactor > 1.0 {
-                        ZoomSliderView(
-                            currentZoom: $viewModel.currentZoomFactor,
-                            minZoom: viewModel.minZoomFactor,
-                            maxZoom: viewModel.maxZoomFactor,
-                            onZoomChange: { viewModel.setZoom($0) },
-                            onReset: { viewModel.resetZoom(); lastZoomScale = 1.0 }
-                        )
-                        .padding(.trailing, 16)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                    }
+                    // Nessuna HUD qui: verrà mostrata come overlay in basso a destra
                     #endif
                     
                     Spacer()
@@ -107,6 +111,28 @@ struct ContentView: View {
                         isTorchAvailable: viewModel.isTorchAvailable
                     )
                 }
+
+                // Barra zoom verticale sulla destra - adattiva per landscape
+                #if os(iOS)
+                if viewModel.isPreviewVisible {
+                    GeometryReader { geo in
+                        let isLandscape = geo.size.width > geo.size.height
+                        VerticalZoomSlider(
+                            value: viewModel.currentZoomFactor,
+                            min: viewModel.minZoomFactor,
+                            max: viewModel.maxZoomFactor,
+                            displayScale: viewModel.zoomDisplayScale,
+                            compact: isLandscape,
+                            onSet: { viewModel.setZoom($0); lastZoomScale = $0 },
+                            onReset: { viewModel.resetZoom(); lastZoomScale = viewModel.currentZoomFactor }
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                        .padding(.trailing, 8)
+                        .padding(.top, isLandscape ? 60 : 100)
+                        .padding(.bottom, isLandscape ? 20 : 120)
+                    }
+                }
+                #endif
             }
         }
         #if os(macOS)
@@ -132,85 +158,6 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Zoom Slider View
-struct ZoomSliderView: View {
-    @Binding var currentZoom: CGFloat
-    let minZoom: CGFloat
-    let maxZoom: CGFloat
-    let onZoomChange: (CGFloat) -> Void
-    let onReset: () -> Void
-    
-    var body: some View {
-        VStack(spacing: 8) {
-            // Zoom value indicator
-            Text(String(format: "%.1fx", currentZoom))
-                .font(.system(size: 12, weight: .bold, design: .monospaced))
-                .foregroundColor(.white)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.black.opacity(0.6))
-                .cornerRadius(4)
-            
-            // Vertical slider
-            ZStack {
-                // Track background
-                RoundedRectangle(cornerRadius: 3)
-                    .fill(Color.white.opacity(0.3))
-                    .frame(width: 6, height: 150)
-                
-                // Progress fill
-                VStack {
-                    Spacer()
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(Color.white)
-                        .frame(width: 6, height: progressHeight)
-                }
-                .frame(height: 150)
-                
-                // Tick marks
-                VStack(spacing: 0) {
-                    ForEach(0..<5) { i in
-                        Rectangle()
-                            .fill(Color.white.opacity(0.5))
-                            .frame(width: 12, height: 1)
-                        if i < 4 {
-                            Spacer()
-                        }
-                    }
-                }
-                .frame(height: 150)
-            }
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        let height: CGFloat = 150
-                        let y = max(0, min(height, height - value.location.y))
-                        let progress = y / height
-                        let newZoom = minZoom + (maxZoom - minZoom) * progress
-                        onZoomChange(newZoom)
-                    }
-            )
-            
-            // Reset button
-            Button(action: onReset) {
-                Image(systemName: "1.circle.fill")
-                    .font(.system(size: 24))
-                    .foregroundColor(.white.opacity(0.8))
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.vertical, 12)
-        .padding(.horizontal, 8)
-        .background(Color.black.opacity(0.4))
-        .cornerRadius(20)
-    }
-    
-    private var progressHeight: CGFloat {
-        let progress = (currentZoom - minZoom) / (maxZoom - minZoom)
-        return max(6, 150 * progress)
-    }
-}
-
 // MARK: - Top Bar View (minimal)
 struct TopBarView: View {
     let isStreaming: Bool
@@ -218,109 +165,174 @@ struct TopBarView: View {
     let quality: VideoQuality
     @Binding var showSettings: Bool
     @Binding var showSourcePicker: Bool
-    @State private var streamingTime: TimeInterval = 0
-    @State private var timer: Timer?
     
     var body: some View {
         HStack {
-            // Streaming indicator
-            HStack(spacing: 8) {
-                // LIVE dot
+            // Stato streaming
+            HStack(spacing: 6) {
                 Circle()
-                    .fill(isStreaming ? Color.red : Color.gray.opacity(0.5))
-                    .frame(width: 12, height: 12)
-                    .overlay(
-                        Circle()
-                            .stroke(Color.white.opacity(0.3), lineWidth: 1)
-                    )
-                
-                if isStreaming {
-                    Text("LIVE")
-                        .font(.system(size: 14, weight: .bold, design: .monospaced))
-                        .foregroundColor(.red)
-                    
-                    Text(formatTime(streamingTime))
-                        .font(.system(size: 14, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white)
-                }
+                    .fill(isStreaming ? Color.red : Color.gray)
+                    .frame(width: 8, height: 8)
+                Text(isStreaming ? "LIVE" : "IDLE")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Color.black.opacity(0.5))
-            .cornerRadius(6)
             
             Spacer()
             
-            // Quality badge
-            Text(quality.rawValue)
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .foregroundColor(.white)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.black.opacity(0.5))
-                .cornerRadius(4)
-            
-            // Server indicator
-            if let server = serverName {
-                HStack(spacing: 4) {
-                    Image(systemName: "antenna.radiowaves.left.and.right")
-                        .font(.system(size: 10))
-                    Text(server)
-                        .font(.system(size: 11))
-                        .lineLimit(1)
+            // Server e qualità
+            HStack(spacing: 10) {
+                if let name = serverName {
+                    Text(name)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white.opacity(0.9))
                 }
-                .foregroundColor(isStreaming ? .green : .gray)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.black.opacity(0.5))
-                .cornerRadius(4)
+                Text(quality.displayName)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white.opacity(0.9))
             }
             
-            // Source picker button
-            Button(action: { showSourcePicker = true }) {
-                Image(systemName: "photo.on.rectangle.angled")
-                    .font(.system(size: 18))
-                    .foregroundColor(.white)
-                    .padding(10)
-                    .background(Color.black.opacity(0.5))
-                    .clipShape(Circle())
-            }
-            .buttonStyle(.plain)
+            Spacer()
             
-            // Settings button
-            Button(action: { showSettings = true }) {
-                Image(systemName: "gearshape.fill")
-                    .font(.system(size: 18))
-                    .foregroundColor(.white)
-                    .padding(10)
-                    .background(Color.black.opacity(0.5))
-                    .clipShape(Circle())
+            // Azioni
+            HStack(spacing: 12) {
+                Button { showSettings = true } label: {
+                    Image(systemName: "gearshape.fill")
+                        .foregroundColor(.white)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
-        .onChange(of: isStreaming) { streaming in
-            if streaming {
-                streamingTime = 0
-                timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
-                    streamingTime += 1
-                }
-            } else {
-                timer?.invalidate()
-                timer = nil
+        .padding(.bottom, 4)
+        .background(
+            LinearGradient(
+                gradient: Gradient(colors: [Color.black.opacity(0.6), Color.clear]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+    }
+}
+
+// MARK: - Vertical Zoom Slider (destra schermo)
+struct VerticalZoomSlider: View {
+    let value: CGFloat
+    let min: CGFloat
+    let max: CGFloat
+    let displayScale: CGFloat  // 0.5 per virtual device, 1.0 per altri
+    var compact: Bool = false  // modalità compatta per landscape
+    let onSet: (CGFloat) -> Void
+    let onReset: () -> Void
+    
+    private var sliderHeight: CGFloat { compact ? 120 : 200 }
+    
+    // Valori visualizzati (0.5x, 1x, 2x, etc)
+    private var displayValue: CGFloat { value * displayScale }
+    private var displayMin: CGFloat { min * displayScale }
+    private var displayMax: CGFloat { max * displayScale }
+    
+    var body: some View {
+        VStack(spacing: compact ? 6 : 12) {
+            // Pulsante +
+            Button(action: { step(0.2) }) {
+                Image(systemName: "plus")
+                    .font(.system(size: compact ? 14 : 16, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: compact ? 28 : 32, height: compact ? 28 : 32)
+                    .background(Color.black.opacity(0.5))
+                    .clipShape(Circle())
             }
+            .buttonStyle(.plain)
+            
+            // Slider verticale
+            ZStack(alignment: .bottom) {
+                // Track sfondo
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.white.opacity(0.3))
+                    .frame(width: 6, height: sliderHeight)
+                
+                // Track riempimento
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.yellow)
+                    .frame(width: 6, height: fillHeight)
+                
+                // Indicatore 1x (solo se non compact)
+                if !compact {
+                    HStack(spacing: 4) {
+                        Rectangle()
+                            .fill(Color.white)
+                            .frame(width: 14, height: 2)
+                        Text("1x")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(.white)
+                    }
+                    .offset(y: -oneXOffset)
+                }
+            }
+            .frame(width: compact ? 40 : 50, height: sliderHeight)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { drag in
+                        let y = sliderHeight - drag.location.y
+                        let clamped = Swift.max(0, Swift.min(y, sliderHeight))
+                        let progress = clamped / sliderHeight
+                        let newValue = min + (max - min) * progress
+                        onSet(newValue)
+                    }
+            )
+            
+            // Pulsante -
+            Button(action: { step(-0.2) }) {
+                Image(systemName: "minus")
+                    .font(.system(size: compact ? 14 : 16, weight: .bold))
+                    .foregroundColor(.white)
+                    .frame(width: compact ? 28 : 32, height: compact ? 28 : 32)
+                    .background(Color.black.opacity(0.5))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            
+            // Valore corrente e reset
+            Button(action: onReset) {
+                Text(format(displayValue))
+                    .font(.system(size: compact ? 12 : 14, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, compact ? 6 : 10)
+                    .padding(.vertical, compact ? 4 : 6)
+                    .background(Color.black.opacity(0.6))
+                    .cornerRadius(8)
+            }
+            .buttonStyle(.plain)
         }
+        .padding(.vertical, compact ? 4 : 8)
+        .padding(.horizontal, compact ? 4 : 6)
+        .background(Color.black.opacity(0.3))
+        .cornerRadius(compact ? 16 : 20)
     }
     
-    private func formatTime(_ time: TimeInterval) -> String {
-        let hours = Int(time) / 3600
-        let minutes = (Int(time) % 3600) / 60
-        let seconds = Int(time) % 60
-        if hours > 0 {
-            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
-        }
-        return String(format: "%02d:%02d", minutes, seconds)
+    private var fillHeight: CGFloat {
+        let progress = (value - min) / (max - min)
+        return sliderHeight * Swift.max(0, Swift.min(progress, 1))
+    }
+    
+    private var oneXOffset: CGFloat {
+        // Posizione del marker 1x sulla barra (raw = 1/displayScale per avere 1x visuale)
+        let oneXRaw = 1.0 / displayScale
+        let progress = (oneXRaw - min) / (max - min)
+        return sliderHeight * Swift.max(0, Swift.min(progress, 1))
+    }
+    
+    private func step(_ delta: CGFloat) {
+        // delta è in unità visuali, converti in raw
+        let rawDelta = delta / displayScale
+        let next = Swift.max(min, Swift.min(value + rawDelta, max))
+        onSet(next)
+    }
+    
+    private func format(_ v: CGFloat) -> String {
+        return String(format: "%.1fx", v)
     }
 }
 

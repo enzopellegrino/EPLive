@@ -214,6 +214,24 @@ struct SettingsView: View {
                     
                     Toggle("Bitrate Personalizzato", isOn: $viewModel.streamingSettings.useCustomBitrate)
                         .disabled(viewModel.isStreaming)
+                    
+                    if viewModel.streamingSettings.useCustomBitrate {
+                        HStack {
+                            Text("Bitrate")
+                            Spacer()
+                            Text(viewModel.streamingSettings.bitrateFormatted)
+                                .foregroundColor(.secondary)
+                        }
+                        Slider(value: $viewModel.streamingSettings.bitrateInMbps, in: 0.5...25, step: 0.5)
+                            .disabled(viewModel.isStreaming)
+                        
+                        Picker("Profilo H.264", selection: $viewModel.streamingSettings.h264Profile) {
+                            ForEach(H264Profile.allCases) { profile in
+                                Text(profile.rawValue).tag(profile)
+                            }
+                        }
+                        .disabled(viewModel.isStreaming)
+                    }
                 }
                 
                 Section(header: Text("Audio")) {
