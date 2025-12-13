@@ -160,7 +160,7 @@ struct SettingsView: View {
                             InfoRow(title: "Permessi Camera", 
                                    value: viewModel.cameraPermissionGranted ? "Concessi" : "Non Concessi",
                                    valueColor: viewModel.cameraPermissionGranted ? .green : .red)
-                            InfoRow(title: "Versione", value: "1.0")
+                            InfoRow(title: "Versione", value: AppVersion.fullVersion)
                         }
                         .padding(.vertical, 8)
                     }
@@ -281,7 +281,7 @@ struct SettingsView: View {
                     InfoRow(title: "Permessi Camera", 
                            value: viewModel.cameraPermissionGranted ? "Concessi" : "Non Concessi",
                            valueColor: viewModel.cameraPermissionGranted ? .green : .red)
-                    InfoRow(title: "Versione", value: "1.0")
+                    InfoRow(title: "Versione", value: AppVersion.fullVersion)
                 }
                 
                 Section {
@@ -309,21 +309,7 @@ struct SettingsView: View {
     
     private func resetToDefaults() {
         viewModel.selectedQuality = .medium
-        viewModel.streamingSettings.selectedFPS = .fps30
-        viewModel.streamingSettings.useCustomBitrate = false
-        viewModel.streamingSettings.customBitrate = 4_000_000
-        viewModel.streamingSettings.h264Profile = .baseline
-        viewModel.streamingSettings.keyframeInterval = .sec2
-        viewModel.streamingSettings.enableAudio = true
-        viewModel.streamingSettings.audioBitrate = .medium
-        viewModel.streamingSettings.audioSampleRate = .rate44100
-        viewModel.streamingSettings.srtLatency = .medium
-        viewModel.streamingSettings.enableEncryption = false
-        viewModel.streamingSettings.srtPassphrase = ""
-        viewModel.streamingSettings.enableTorch = false
-        viewModel.streamingSettings.adaptiveBitrate = false
-        viewModel.streamingSettings.lowLatencyMode = false
-        viewModel.streamingSettings.enableStabilization = true
+        viewModel.streamingSettings.resetToDefaults()
     }
 }
 

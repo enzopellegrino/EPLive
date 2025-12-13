@@ -8,6 +8,16 @@
 import Foundation
 import Combine
 
+// MARK: - App Version
+struct AppVersion {
+    static let current = "1.0.0"
+    static let build = "1"
+    
+    static var fullVersion: String {
+        "\(current) (\(build))"
+    }
+}
+
 // MARK: - FPS Options
 enum FPSOption: Int, CaseIterable, Identifiable {
     case fps24 = 24
@@ -168,6 +178,30 @@ struct CustomResolution: Equatable {
 
 // MARK: - Streaming Settings Container
 class StreamingSettings: ObservableObject {
+    // MARK: - UserDefaults Keys
+    private enum Keys {
+        static let customBitrate = "settings.customBitrate"
+        static let selectedFPS = "settings.selectedFPS"
+        static let h264Profile = "settings.h264Profile"
+        static let keyframeInterval = "settings.keyframeInterval"
+        static let useCustomBitrate = "settings.useCustomBitrate"
+        static let audioBitrate = "settings.audioBitrate"
+        static let audioSampleRate = "settings.audioSampleRate"
+        static let enableAudio = "settings.enableAudio"
+        static let srtLatency = "settings.srtLatency"
+        static let srtPassphrase = "settings.srtPassphrase"
+        static let enableEncryption = "settings.enableEncryption"
+        static let enableTorch = "settings.enableTorch"
+        static let torchLevel = "settings.torchLevel"
+        static let enableStabilization = "settings.enableStabilization"
+        static let cameraRotation = "settings.cameraRotation"
+        static let adaptiveBitrate = "settings.adaptiveBitrate"
+        static let lowLatencyMode = "settings.lowLatencyMode"
+    }
+    
+    private let defaults = UserDefaults.standard
+    private var cancellables = Set<AnyCancellable>()
+    
     // Video
     @Published var customBitrate: Double = 4_000_000 // 4 Mbps default
     @Published var selectedFPS: FPSOption = .fps30
@@ -202,5 +236,230 @@ class StreamingSettings: ObservableObject {
     
     var bitrateFormatted: String {
         String(format: "%.1f Mbps", bitrateInMbps)
+    }
+    
+    // MARK: - Initialization
+    init() {
+        loadSettings()
+        setupAutoSave()
+    }
+    
+    // MARK: - Load Settings
+    private func loadSettings() {
+        // Video
+        if defaults.object(forKey: Keys.customBitrate) != nil {
+            customBitrate = defaults.double(forKey: Keys.customBitrate)
+        }
+        if let fpsValue = defaults.object(forKey: Keys.selectedFPS) as? Int,
+           let fps = FPSOption(rawValue: fpsValue) {
+            selectedFPS = fps
+        }
+        if let profileValue = defaults.string(forKey: Keys.h264Profile),
+           let profile = H264Profile(rawValue: profileValue) {
+            h264Profile = profile
+        }
+        if let keyframeValue = defaults.object(forKey: Keys.keyframeInterval) as? Int,
+           let keyframe = KeyframeInterval(rawValue: keyframeValue) {
+            keyframeInterval = keyframe
+        }
+        if defaults.object(forKey: Keys.useCustomBitrate) != nil {
+            useCustomBitrate = defaults.bool(forKey: Keys.useCustomBitrate)
+        }
+        
+        // Audio
+        if let audioBitrateValue = defaults.object(forKey: Keys.audioBitrate) as? Int,
+           let bitrate = AudioBitrate(rawValue: audioBitrateValue) {
+            audioBitrate = bitrate
+        }
+        if let sampleRateValue = defaults.object(forKey: Keys.audioSampleRate) as? Double,
+           let rate = AudioSampleRate(rawValue: sampleRateValue) {
+            audioSampleRate = rate
+        }
+        if defaults.object(forKey: Keys.enableAudio) != nil {
+            enableAudio = defaults.bool(forKey: Keys.enableAudio)
+        }
+        
+        // SRT
+        if let latencyValue = defaults.object(forKey: Keys.srtLatency) as? Int,
+           let latency = SRTLatency(rawValue: latencyValue) {
+            srtLatency = latency
+        }
+        if let passphrase = defaults.string(forKey: Keys.srtPassphrase) {
+            srtPassphrase = passphrase
+        }
+        if defaults.object(forKey: Keys.enableEncryption) != nil {
+            enableEncryption = defaults.bool(forKey: Keys.enableEncryption)
+        }
+        
+        // Camera
+        if defaults.object(forKey: Keys.enableTorch) != nil {
+            enableTorch = defaults.bool(forKey: Keys.enableTorch)
+        }
+        if defaults.object(forKey: Keys.torchLevel) != nil {
+            torchLevel = defaults.float(forKey: Keys.torchLevel)
+        }
+        if defaults.object(forKey: Keys.enableStabilization) != nil {
+            enableStabilization = defaults.bool(forKey: Keys.enableStabilization)
+        }
+        if let rotationValue = defaults.object(forKey: Keys.cameraRotation) as? Int,
+           let rotation = CameraRotation(rawValue: rotationValue) {
+            cameraRotation = rotation
+        }
+        
+        // Advanced
+        if defaults.object(forKey: Keys.adaptiveBitrate) != nil {
+            adaptiveBitrate = defaults.bool(forKey: Keys.adaptiveBitrate)
+        }
+        if defaults.object(forKey: Keys.lowLatencyMode) != nil {
+            lowLatencyMode = defaults.bool(forKey: Keys.lowLatencyMode)
+        }
+    }
+    
+    // MARK: - Auto Save
+    private func setupAutoSave() {
+        // Video
+        $customBitrate
+            .dropFirst()
+            .sink { [weak self] value in
+                self?.defaults.set(value, forKey: Keys.customBitrate)
+            }
+            .store(in: &cancellables)
+        
+        $selectedFPS
+            .dropFirst()
+            .sink { [weak self] value in
+                self?.defaults.set(value.rawValue, forKey: Keys.selectedFPS)
+            }
+            .store(in: &cancellables)
+        
+        $h264Profile
+            .dropFirst()
+            .sink { [weak self] value in
+                self?.defaults.set(value.rawValue, forKey: Keys.h264Profile)
+            }
+            .store(in: &cancellables)
+        
+        $keyframeInterval
+            .dropFirst()
+            .sink { [weak self] value in
+                self?.defaults.set(value.rawValue, forKey: Keys.keyframeInterval)
+            }
+            .store(in: &cancellables)
+        
+        $useCustomBitrate
+            .dropFirst()
+            .sink { [weak self] value in
+                self?.defaults.set(value, forKey: Keys.useCustomBitrate)
+            }
+            .store(in: &cancellables)
+        
+        // Audio
+        $audioBitrate
+            .dropFirst()
+            .sink { [weak self] value in
+                self?.defaults.set(value.rawValue, forKey: Keys.audioBitrate)
+            }
+            .store(in: &cancellables)
+        
+        $audioSampleRate
+            .dropFirst()
+            .sink { [weak self] value in
+                self?.defaults.set(value.rawValue, forKey: Keys.audioSampleRate)
+            }
+            .store(in: &cancellables)
+        
+        $enableAudio
+            .dropFirst()
+            .sink { [weak self] value in
+                self?.defaults.set(value, forKey: Keys.enableAudio)
+            }
+            .store(in: &cancellables)
+        
+        // SRT
+        $srtLatency
+            .dropFirst()
+            .sink { [weak self] value in
+                self?.defaults.set(value.rawValue, forKey: Keys.srtLatency)
+            }
+            .store(in: &cancellables)
+        
+        $srtPassphrase
+            .dropFirst()
+            .sink { [weak self] value in
+                self?.defaults.set(value, forKey: Keys.srtPassphrase)
+            }
+            .store(in: &cancellables)
+        
+        $enableEncryption
+            .dropFirst()
+            .sink { [weak self] value in
+                self?.defaults.set(value, forKey: Keys.enableEncryption)
+            }
+            .store(in: &cancellables)
+        
+        // Camera
+        $enableTorch
+            .dropFirst()
+            .sink { [weak self] value in
+                self?.defaults.set(value, forKey: Keys.enableTorch)
+            }
+            .store(in: &cancellables)
+        
+        $torchLevel
+            .dropFirst()
+            .sink { [weak self] value in
+                self?.defaults.set(value, forKey: Keys.torchLevel)
+            }
+            .store(in: &cancellables)
+        
+        $enableStabilization
+            .dropFirst()
+            .sink { [weak self] value in
+                self?.defaults.set(value, forKey: Keys.enableStabilization)
+            }
+            .store(in: &cancellables)
+        
+        $cameraRotation
+            .dropFirst()
+            .sink { [weak self] value in
+                self?.defaults.set(value.rawValue, forKey: Keys.cameraRotation)
+            }
+            .store(in: &cancellables)
+        
+        // Advanced
+        $adaptiveBitrate
+            .dropFirst()
+            .sink { [weak self] value in
+                self?.defaults.set(value, forKey: Keys.adaptiveBitrate)
+            }
+            .store(in: &cancellables)
+        
+        $lowLatencyMode
+            .dropFirst()
+            .sink { [weak self] value in
+                self?.defaults.set(value, forKey: Keys.lowLatencyMode)
+            }
+            .store(in: &cancellables)
+    }
+    
+    // MARK: - Reset to Defaults
+    func resetToDefaults() {
+        customBitrate = 4_000_000
+        selectedFPS = .fps30
+        h264Profile = .baseline
+        keyframeInterval = .sec2
+        useCustomBitrate = false
+        audioBitrate = .medium
+        audioSampleRate = .rate44100
+        enableAudio = true
+        srtLatency = .medium
+        srtPassphrase = ""
+        enableEncryption = false
+        enableTorch = false
+        torchLevel = 0.5
+        enableStabilization = true
+        cameraRotation = .rotate0
+        adaptiveBitrate = false
+        lowLatencyMode = false
     }
 }

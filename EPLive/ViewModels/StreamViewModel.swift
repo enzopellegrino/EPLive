@@ -30,6 +30,13 @@ enum StreamingError: LocalizedError {
 
 @MainActor
 class StreamViewModel: ObservableObject {
+    // MARK: - UserDefaults Keys
+    private enum Keys {
+        static let selectedQuality = "viewmodel.selectedQuality"
+    }
+    
+    private let defaults = UserDefaults.standard
+    
     @Published var isStreaming = false
     @Published var isPreviewing = false
     @Published var isPreviewVisible = true  // Per nascondere preview e risparmiare batteria
@@ -38,7 +45,11 @@ class StreamViewModel: ObservableObject {
     @Published var showError = false
     @Published var cameraPermissionGranted = false
     @Published var currentServer: SRTServer?
-    @Published var selectedQuality: VideoQuality = .ultra
+    @Published var selectedQuality: VideoQuality = .ultra {
+        didSet {
+            defaults.set(selectedQuality.rawValue, forKey: Keys.selectedQuality)
+        }
+    }
     
     // Advanced settings
     @Published var streamingSettings = StreamingSettings()
@@ -55,6 +66,12 @@ class StreamViewModel: ObservableObject {
     private var orientationObserver: NSObjectProtocol?
     
     init() {
+        // Load saved quality
+        if let qualityRaw = defaults.string(forKey: Keys.selectedQuality),
+           let quality = VideoQuality(rawValue: qualityRaw) {
+            selectedQuality = quality
+        }
+        
         currentServer = serverManager.defaultServer
         setupBindings()
         checkPermissions()
@@ -322,20 +339,9 @@ class StreamViewModel: ObservableObject {
                     try camera.setTorchModeOn(level: streamingSettings.torchLevel)
                     camera.unlockForConfiguration()
                 }
+                
                 // Imposta zoom iniziale a 1x reale (wide lens)
-                // Su virtual device (triple/dual), raw 2.0 = wide 1x
-                // Su device normali, raw 1.0 = wide 1x
-                do {
-                    try camera.lockForConfiguration()
-                    let isVirtualDevice = camera.deviceType == .builtInTripleCamera || camera.deviceType == .builtInDualWideCamera
-                    let targetZoom: CGFloat = isVirtualDevice ? 2.0 : 1.0
-                    camera.videoZoomFactor = Swift.max(camera.minAvailableVideoZoomFactor, Swift.min(targetZoom, camera.maxAvailableVideoZoomFactor))
-                    camera.unlockForConfiguration()
-                    currentZoomFactor = camera.videoZoomFactor
-                } catch {
-                    print("Error setting initial zoom: \(error)")
-                    setupInitialZoom()
-                }
+                setupInitialZoom()
                 
                 print("Attached camera: \(camera.localizedName)")
             } catch {
@@ -467,18 +473,9 @@ class StreamViewModel: ObservableObject {
                     try await srtStream?.attachCamera(camera)
                     currentCameraPosition = newPosition
                     calibrateZoomScale()
+                    
                     // Dopo flip, imposta 1x reale (wide lens)
-                    do {
-                        try camera.lockForConfiguration()
-                        let isVirtualDevice = camera.deviceType == .builtInTripleCamera || camera.deviceType == .builtInDualWideCamera
-                        let targetZoom: CGFloat = isVirtualDevice ? 2.0 : 1.0
-                        camera.videoZoomFactor = Swift.max(camera.minAvailableVideoZoomFactor, Swift.min(targetZoom, camera.maxAvailableVideoZoomFactor))
-                        camera.unlockForConfiguration()
-                        currentZoomFactor = camera.videoZoomFactor
-                    } catch {
-                        print("Error setting zoom after flip: \(error)")
-                        setupInitialZoom()
-                    }
+                    setupInitialZoom()
                     
                     // Torch is only available on back camera
                     if newPosition == .front {
