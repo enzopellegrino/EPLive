@@ -211,8 +211,7 @@ struct LocalVideoPickerView: View {
         Task {
             await viewModel.loadLocalVideo(from: url)
             isLoadingVideo = false
-            // Chiudi il picker dopo aver caricato il video
-            dismiss()
+            // NON chiudere automaticamente - permetti di configurare loop
         }
     }
     
@@ -226,10 +225,7 @@ struct LocalVideoPickerView: View {
             // Load the video data
             if let movie = try await item.loadTransferable(type: VideoTransferable.self) {
                 await viewModel.loadLocalVideo(from: movie.url)
-                // Chiudi il picker dopo aver caricato il video
-                await MainActor.run {
-                    dismiss()
-                }
+                // NON chiudere automaticamente - permetti di configurare loop
             }
         } catch {
             await MainActor.run {

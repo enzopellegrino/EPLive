@@ -327,23 +327,42 @@ class StreamViewModel: ObservableObject {
     /// Attiva la sorgente video locale
     func activateLocalVideoSource(url: URL) async {
         do {
-            // Carica il video
-            try await localVideoStreamer.loadVideo(from: url)
+            print("🎥 Activating local video source: \(url.lastPathComponent)")
             
-            // Scollega la camera se attiva
-            if selectedSourceType == .camera {
-                try? await srtStream?.attachCamera(nil)
-                isPreviewing = false
+            // Stop streaming se attivo
+            if isStreaming {
+                print("⏹️ Stopping active streaming before switching to video")
+                stopStreaming()
+                // Aspetta che lo streaming si fermi completamente
+                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
             }
             
+            // Scollega completamente la camera se attiva
+            if selectedSourceType == .camera {
+                print("📷 Detaching camera before loading video")
+                try? await srtStream?.attachCamera(nil)
+                try? await srtStream?.attachAudio(nil)
+                isPreviewing = false
+                srtStream = nil // Reset stream
+            }
+            
+            // Carica il video
+            print("📥 Loading video file...")
+            try await localVideoStreamer.loadVideo(from: url)
+            
+            // Aggiorna lo stato
             selectedSourceType = .localVideo
             selectedVideoURL = url
             isSourceActive = true
+            isPreviewVisible = true // Abilita preview
+            
+            print("✅ Video source activated - ready for preview")
             
             // Setup stream per video locale (senza camera)
             await setupStreamForLocalVideo()
             
         } catch {
+            print("❌ Error activating video source: \(error)")
             errorMessage = error.localizedDescription
             showError = true
         }
@@ -351,19 +370,42 @@ class StreamViewModel: ObservableObject {
     
     /// Disattiva la sorgente corrente
     func deactivateSource() {
+        print("🔙 Deactivating current source: \(selectedSourceType?.rawValue ?? "none")")
+        
+        // Stop streaming se attivo
+        if isStreaming {
+            print("⏹️ Stopping active streaming")
+            stopStreaming()
+        }
+        
+        // Stop video locale se attivo
         if selectedSourceType == .localVideo {
+            print("⏹️ Stopping local video streamer")
             localVideoStreamer.stopStreaming()
         }
         
+        // Reset source state
         selectedSourceType = nil
         selectedVideoURL = nil
         isSourceActive = false
         isPreviewing = false
+        isPreviewVisible = true // Reset preview visibility
         
-        // Cleanup stream
+        print("🧹 Cleaning up stream resources")
+        
+        // Cleanup stream completamente
         Task {
-            try? await srtStream?.attachCamera(nil)
-            try? await srtStream?.attachAudio(nil)
+            await MainActor.run {
+                // Scollega camera e audio
+                Task {
+                    try? await srtStream?.attachCamera(nil)
+                    try? await srtStream?.attachAudio(nil)
+                }
+                
+                // Reset stream
+                srtStream = nil
+                print("✅ Source deactivated and cleaned up")
+            }
         }
     }
     
@@ -371,14 +413,18 @@ class StreamViewModel: ObservableObject {
     
     /// Setup stream per video locale (senza camera)
     private func setupStreamForLocalVideo() async {
-        // Setup AVAudioSession (iOS only)
+        print("🔧 Setting up stream for LOCAL VIDEO - NO CAMERA")
+        
+        // Setup AVAudioSession (iOS only) - configurazione per playback e registrazione
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+            // Usa playback per permettere l'audio del video
+            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
             try session.setActive(true)
+            print("✅ AVAudioSession configured for video playback with audio")
         } catch {
-            print("AVAudioSession setup error: \(error)")
+            print("❌ AVAudioSession setup error: \(error)")
         }
         #endif
         
@@ -389,7 +435,11 @@ class StreamViewModel: ObservableObject {
             applyVideoQuality()
         }
         
-        print("Stream ready for local video - camera not attached")
+        // IMPORTANTE: Assicurati che la camera NON sia attaccata
+        try? await srtStream?.attachCamera(nil)
+        try? await srtStream?.attachAudio(nil)
+        
+        print("✅ Stream ready for local video - camera explicitly detached")
     }
     
     private func setupHaishinKitPreview() async {
@@ -552,27 +602,49 @@ class StreamViewModel: ObservableObject {
         
         Task {
             do {
-                // Setup stream if not already done
+                print("🚀 Starting streaming - source: \(selectedSourceType?.rawValue ?? "none")")
+                
+                // Setup stream if not already done - USA LA FUNZIONE GIUSTA IN BASE ALLA SORGENTE
                 if srtStream == nil {
-                    await setupHaishinKitPreview()
+                    print("🔧 Setting up stream for \(selectedSourceType?.rawValue ?? "unknown")")
+                    if selectedSourceType == .localVideo {
+                        await setupStreamForLocalVideo()
+                    } else {
+                        await setupHaishinKitPreview()
+                    }
+                }
+                
+                // IMPORTANTE: Se stiamo streamando video locale, assicurati che la camera NON sia attaccata
+                if selectedSourceType == .localVideo {
+                    print("🎥 Ensuring camera is detached for local video streaming")
+                    try? await srtStream?.attachCamera(nil)
+                    try? await srtStream?.attachAudio(nil)
                 }
                 
                 guard let urlObj = URL(string: server.url) else {
                     throw StreamingError.invalidURL
                 }
                 
+                print("🔗 Connecting to SRT server: \(server.url)")
+                
                 // Connect and publish
                 try await srtConnection?.open(urlObj)
                 await srtStream?.publish()
                 
+                print("✅ SRT connection established and publishing")
+                
                 // If streaming local video, start the video streamer
                 if selectedSourceType == .localVideo, let stream = srtStream {
+                    print("🎬 Starting local video streaming...")
                     try await localVideoStreamer.startStreaming(to: stream, loop: loopLocalVideo)
+                    print("✅ Local video streaming started")
                 }
                 
                 isStreaming = true
                 connectionStatus = "Streaming"
+                print("✅ Streaming active")
             } catch {
+                print("❌ Streaming error: \(error)")
                 errorMessage = error.localizedDescription
                 showError = true
                 connectionStatus = "Error"

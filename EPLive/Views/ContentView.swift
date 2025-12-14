@@ -46,20 +46,35 @@ struct ContentView: View {
         }
         #if os(iOS)
         .statusBar(hidden: true)
+        // Blocca orientamento a portrait per video locale
+        .onAppear {
+            if viewModel.selectedSourceType == .localVideo {
+                AppDelegate.orientationLock = .portrait
+            } else {
+                AppDelegate.orientationLock = .all
+            }
+        }
+        .onChange(of: viewModel.selectedSourceType) { sourceType in
+            if sourceType == .localVideo {
+                AppDelegate.orientationLock = .portrait
+            } else {
+                AppDelegate.orientationLock = .all
+            }
+        }
         #endif
     }
     
     private var streamingView: some View {
         GeometryReader { geometry in
             ZStack(alignment: .bottomTrailing) {
-                // Camera Preview - Full screen
+                // Preview - Full screen (camera o video locale)
                 if viewModel.isPreviewVisible {
+                    if viewModel.selectedSourceType == .camera {
+                        // Camera preview con controlli zoom
                         CameraPreviewView(viewModel: viewModel)
                             .ignoresSafeArea()
                             #if os(iOS)
-                            // Only allow zoom gestures for camera source
                             .gesture(
-                                viewModel.selectedSourceType == .camera ?
                                 MagnificationGesture()
                                     .onChanged { scale in
                                         let newZoom = lastZoomScale * scale
@@ -67,10 +82,9 @@ struct ContentView: View {
                                     }
                                     .onEnded { _ in
                                         lastZoomScale = viewModel.currentZoomFactor
-                                    } : nil
+                                    }
                             )
                             .simultaneousGesture(
-                                viewModel.selectedSourceType == .camera ?
                                 TapGesture(count: 2).onEnded {
                                     // Toggle 1x <-> 2x (se supportato); altrimenti resta su 1x
                                     let minZ = viewModel.minZoomFactor
@@ -83,28 +97,41 @@ struct ContentView: View {
                                     }
                                     viewModel.setZoom(target)
                                     lastZoomScale = viewModel.currentZoomFactor
-                                } : nil
+                                }
                             )
                             #endif
-                    } else {
-                        // Black screen quando preview disabilitato
-                        Color.black
-                            .ignoresSafeArea()
-                        
-                        VStack(spacing: 16) {
-                            Image(systemName: "eye.slash.fill")
-                                .font(.system(size: 60))
-                                .foregroundColor(.gray)
-                            Text("Preview Disabilitato")
-                                .font(.headline)
-                                .foregroundColor(.gray)
-                            Text("Lo streaming continua in background")
-                                .font(.caption)
-                                .foregroundColor(.gray.opacity(0.7))
+                    } else if viewModel.selectedSourceType == .localVideo {
+                        // Per video locale: mostra schermata streaming dedicata durante trasmissione
+                        if viewModel.isStreaming {
+                            LocalVideoStreamingView(viewModel: viewModel)
+                                .ignoresSafeArea()
+                        } else {
+                            // Video preview solo quando NON si sta streamando
+                            VideoPreviewView(viewModel: viewModel)
+                                .ignoresSafeArea()
                         }
                     }
+                } else {
+                    // Black screen quando preview disabilitato
+                    Color.black
+                        .ignoresSafeArea()
                     
-                    // Camera overlay UI
+                    VStack(spacing: 16) {
+                        Image(systemName: "eye.slash.fill")
+                            .font(.system(size: 60))
+                            .foregroundColor(.gray)
+                        Text("Preview Disabilitato")
+                            .font(.headline)
+                            .foregroundColor(.gray)
+                        Text("Lo streaming continua in background")
+                            .font(.caption)
+                            .foregroundColor(.gray.opacity(0.7))
+                    }
+                }
+                
+                // Camera overlay UI - NON mostrare durante streaming video locale
+                // (LocalVideoStreamingView ha i suoi controlli)
+                if !(viewModel.selectedSourceType == .localVideo && viewModel.isStreaming) {
                     VStack(spacing: 0) {
                         // Top bar - minimal info
                         TopBarView(
@@ -160,6 +187,7 @@ struct ContentView: View {
                             isTorchAvailable: viewModel.isTorchAvailable
                         )
                     }
+                }
 
                     // Barra zoom verticale sulla destra - adattiva per landscape
                     // Only show for camera source
