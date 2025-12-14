@@ -12,127 +12,20 @@ struct ContentView: View {
     @StateObject private var viewModel = StreamViewModel()
     @State private var showSettings = false
     @State private var showSourcePicker = false
+    @State private var showLocalVideoPicker = false
     @State private var lastZoomScale: CGFloat = 1.0
     
     var body: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .bottomTrailing) {
-                // Camera Preview - Full screen
-                if viewModel.isPreviewVisible {
-                    CameraPreviewView(viewModel: viewModel)
-                        .ignoresSafeArea()
-                        #if os(iOS)
-                        .gesture(
-                            MagnificationGesture()
-                                .onChanged { scale in
-                                    let newZoom = lastZoomScale * scale
-                                    viewModel.setZoom(newZoom)
-                                }
-                                .onEnded { _ in
-                                    lastZoomScale = viewModel.currentZoomFactor
-                                }
-                        )
-                        .simultaneousGesture(
-                            TapGesture(count: 2).onEnded {
-                                // Toggle 1x <-> 2x (se supportato); altrimenti resta su 1x
-                                let minZ = viewModel.minZoomFactor
-                                let maxZ = viewModel.maxZoomFactor
-                                let target: CGFloat
-                                if abs(viewModel.currentZoomFactor - 2.0) < 0.01 || 2.0 > maxZ {
-                                    target = 1.0
-                                } else {
-                                    target = min(max(2.0, minZ), maxZ)
-                                }
-                                viewModel.setZoom(target)
-                                lastZoomScale = viewModel.currentZoomFactor
-                            }
-                        )
-                        #endif
-                } else {
-                    // Black screen quando preview disabilitato
-                    Color.black
-                        .ignoresSafeArea()
-                    
-                    VStack(spacing: 16) {
-                        Image(systemName: "eye.slash.fill")
-                            .font(.system(size: 60))
-                            .foregroundColor(.gray)
-                        Text("Preview Disabilitato")
-                            .font(.headline)
-                            .foregroundColor(.gray)
-                        Text("Lo streaming continua in background")
-                            .font(.caption)
-                            .foregroundColor(.gray.opacity(0.7))
-                    }
-                }
-                
-                // Camera overlay UI
-                VStack(spacing: 0) {
-                    // Top bar - minimal info
-                    TopBarView(
-                        isStreaming: viewModel.isStreaming,
-                        serverName: viewModel.currentServer?.name,
-                        quality: viewModel.selectedQuality,
-                        showSettings: $showSettings,
-                        showSourcePicker: $showSourcePicker
-                    )
-                    
-                    Spacer()
-                    
-                    #if os(iOS)
-                    // Nessuna HUD qui: verrà mostrata come overlay in basso a destra
-                    #endif
-                    
-                    Spacer()
-                    
-                    // Bottom controls - camera style
-                    BottomControlsView(
-                        isStreaming: viewModel.isStreaming,
-                        isPreviewVisible: viewModel.isPreviewVisible,
-                        onRecord: {
-                            if viewModel.isStreaming {
-                                viewModel.stopStreaming()
-                            } else {
-                                viewModel.startStreaming()
-                            }
-                        },
-                        onTogglePreview: {
-                            viewModel.isPreviewVisible.toggle()
-                        },
-                        onSwitchCamera: {
-                            viewModel.switchCamera()
-                            viewModel.resetZoom()
-                            lastZoomScale = 1.0
-                        },
-                        onTorch: {
-                            viewModel.toggleTorch()
-                        },
-                        isTorchOn: viewModel.streamingSettings.enableTorch,
-                        isTorchAvailable: viewModel.isTorchAvailable
-                    )
-                }
-
-                // Barra zoom verticale sulla destra - adattiva per landscape
-                #if os(iOS)
-                if viewModel.isPreviewVisible {
-                    GeometryReader { geo in
-                        let isLandscape = geo.size.width > geo.size.height
-                        VerticalZoomSlider(
-                            value: viewModel.currentZoomFactor,
-                            min: viewModel.minZoomFactor,
-                            max: viewModel.maxZoomFactor,
-                            displayScale: viewModel.zoomDisplayScale,
-                            compact: isLandscape,
-                            onSet: { viewModel.setZoom($0); lastZoomScale = $0 },
-                            onReset: { viewModel.resetZoom(); lastZoomScale = viewModel.currentZoomFactor }
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
-                        .padding(.trailing, 8)
-                        .padding(.top, isLandscape ? 60 : 100)
-                        .padding(.bottom, isLandscape ? 20 : 120)
-                    }
-                }
-                #endif
+        Group {
+            // Show splash screen when no source is active
+            if !viewModel.isSourceActive {
+                SourceSelectionView(
+                    viewModel: viewModel,
+                    showLocalVideoPicker: $showLocalVideoPicker
+                )
+            } else {
+                // Main streaming UI when source is active
+                streamingView
             }
         }
         #if os(macOS)
@@ -141,10 +34,9 @@ struct ContentView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView(viewModel: viewModel)
         }
-        // TODO: Fix SourcePickerView compilation errors
-        // .sheet(isPresented: $showSourcePicker) {
-        //     SourcePickerView(viewModel: viewModel)
-        // }
+        .sheet(isPresented: $showLocalVideoPicker) {
+            LocalVideoPickerView(viewModel: viewModel)
+        }
         .alert("Errore", isPresented: $viewModel.showError) {
             Button("OK") {
                 viewModel.showError = false
@@ -156,18 +48,175 @@ struct ContentView: View {
         .statusBar(hidden: true)
         #endif
     }
-}
+    
+    private var streamingView: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .bottomTrailing) {
+                // Camera Preview - Full screen
+                if viewModel.isPreviewVisible {
+                        CameraPreviewView(viewModel: viewModel)
+                            .ignoresSafeArea()
+                            #if os(iOS)
+                            // Only allow zoom gestures for camera source
+                            .gesture(
+                                viewModel.selectedSourceType == .camera ?
+                                MagnificationGesture()
+                                    .onChanged { scale in
+                                        let newZoom = lastZoomScale * scale
+                                        viewModel.setZoom(newZoom)
+                                    }
+                                    .onEnded { _ in
+                                        lastZoomScale = viewModel.currentZoomFactor
+                                    } : nil
+                            )
+                            .simultaneousGesture(
+                                viewModel.selectedSourceType == .camera ?
+                                TapGesture(count: 2).onEnded {
+                                    // Toggle 1x <-> 2x (se supportato); altrimenti resta su 1x
+                                    let minZ = viewModel.minZoomFactor
+                                    let maxZ = viewModel.maxZoomFactor
+                                    let target: CGFloat
+                                    if abs(viewModel.currentZoomFactor - 2.0) < 0.01 || 2.0 > maxZ {
+                                        target = 1.0
+                                    } else {
+                                        target = min(max(2.0, minZ), maxZ)
+                                    }
+                                    viewModel.setZoom(target)
+                                    lastZoomScale = viewModel.currentZoomFactor
+                                } : nil
+                            )
+                            #endif
+                    } else {
+                        // Black screen quando preview disabilitato
+                        Color.black
+                            .ignoresSafeArea()
+                        
+                        VStack(spacing: 16) {
+                            Image(systemName: "eye.slash.fill")
+                                .font(.system(size: 60))
+                                .foregroundColor(.gray)
+                            Text("Preview Disabilitato")
+                                .font(.headline)
+                                .foregroundColor(.gray)
+                            Text("Lo streaming continua in background")
+                                .font(.caption)
+                                .foregroundColor(.gray.opacity(0.7))
+                        }
+                    }
+                    
+                    // Camera overlay UI
+                    VStack(spacing: 0) {
+                        // Top bar - minimal info
+                        TopBarView(
+                            viewModel: viewModel,
+                            isStreaming: viewModel.isStreaming,
+                            serverName: viewModel.currentServer?.name,
+                            quality: viewModel.selectedQuality,
+                            sourceType: viewModel.selectedSourceType ?? .camera,
+                            videoName: viewModel.selectedVideoURL?.lastPathComponent,
+                            showSettings: $showSettings,
+                            showSourcePicker: $showSourcePicker,
+                            showLocalVideoPicker: $showLocalVideoPicker
+                        )
+                        
+                        Spacer()
+                        
+                        #if os(iOS)
+                        // Nessuna HUD qui: verrà mostrata come overlay in basso a destra
+                        #endif
+                        
+                        Spacer()
+                        
+                        // Bottom controls - camera style
+                        BottomControlsView(
+                            isStreaming: viewModel.isStreaming,
+                            isPreviewVisible: viewModel.isPreviewVisible,
+                            sourceType: viewModel.selectedSourceType ?? .camera,
+                            onRecord: {
+                                if viewModel.isStreaming {
+                                    viewModel.stopStreaming()
+                                } else {
+                                    viewModel.startStreaming()
+                                }
+                            },
+                            onTogglePreview: {
+                                viewModel.isPreviewVisible.toggle()
+                            },
+                            onSwitchCamera: {
+                                // Only switch camera if camera source is active
+                                if viewModel.selectedSourceType == .camera {
+                                    viewModel.switchCamera()
+                                    viewModel.resetZoom()
+                                    lastZoomScale = 1.0
+                                }
+                            },
+                            onTorch: {
+                                // Only toggle torch if camera source is active
+                                if viewModel.selectedSourceType == .camera {
+                                    viewModel.toggleTorch()
+                                }
+                            },
+                            isTorchOn: viewModel.streamingSettings.enableTorch,
+                            isTorchAvailable: viewModel.isTorchAvailable
+                        )
+                    }
+
+                    // Barra zoom verticale sulla destra - adattiva per landscape
+                    // Only show for camera source
+                    #if os(iOS)
+                    if viewModel.isPreviewVisible && viewModel.selectedSourceType == .camera {
+                        GeometryReader { geo in
+                            let isLandscape = geo.size.width > geo.size.height
+                            VerticalZoomSlider(
+                                value: viewModel.currentZoomFactor,
+                                min: viewModel.minZoomFactor,
+                                max: viewModel.maxZoomFactor,
+                                displayScale: viewModel.zoomDisplayScale,
+                                compact: isLandscape,
+                                onSet: { viewModel.setZoom($0); lastZoomScale = $0 },
+                                onReset: { viewModel.resetZoom(); lastZoomScale = viewModel.currentZoomFactor }
+                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                            .padding(.trailing, 8)
+                            .padding(.top, isLandscape ? 60 : 100)
+                            .padding(.bottom, isLandscape ? 20 : 120)
+                        }
+                    }
+                    #endif
+                }
+            }
+        }
+    }
 
 // MARK: - Top Bar View (minimal)
 struct TopBarView: View {
+    @ObservedObject var viewModel: StreamViewModel
     let isStreaming: Bool
     let serverName: String?
     let quality: VideoQuality
+    let sourceType: StreamSourceType
+    let videoName: String?
     @Binding var showSettings: Bool
     @Binding var showSourcePicker: Bool
+    @Binding var showLocalVideoPicker: Bool
     
     var body: some View {
         HStack {
+            // Pulsante indietro (torna alla schermata iniziale)
+            Button(action: {
+                Task {
+                    await viewModel.deactivateSource()
+                }
+            }) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.white)
+                    .padding(8)
+                    .background(Color.black.opacity(0.3))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            
             // Stato streaming
             HStack(spacing: 6) {
                 Circle()
@@ -180,7 +229,7 @@ struct TopBarView: View {
             
             Spacer()
             
-            // Server e qualità
+            // Server, qualità e sorgente
             HStack(spacing: 10) {
                 if let name = serverName {
                     Text(name)
@@ -190,12 +239,39 @@ struct TopBarView: View {
                 Text(quality.displayName)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.white.opacity(0.9))
+                
+                // Source indicator
+                if sourceType == .localVideo {
+                    HStack(spacing: 4) {
+                        Image(systemName: "film.fill")
+                            .font(.system(size: 10))
+                        if let name = videoName {
+                            Text(name)
+                                .font(.system(size: 10))
+                                .lineLimit(1)
+                        }
+                    }
+                    .foregroundColor(.orange)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.orange.opacity(0.2))
+                    .cornerRadius(4)
+                }
             }
             
             Spacer()
             
             // Azioni
             HStack(spacing: 12) {
+                // Video locale button - mostra solo in modalità video locale
+                if sourceType == .localVideo {
+                    Button { showLocalVideoPicker = true } label: {
+                        Image(systemName: "film.fill")
+                            .foregroundColor(.orange)
+                    }
+                    .buttonStyle(.plain)
+                }
+                
                 Button { showSettings = true } label: {
                     Image(systemName: "gearshape.fill")
                         .foregroundColor(.white)
@@ -340,6 +416,7 @@ struct VerticalZoomSlider: View {
 struct BottomControlsView: View {
     let isStreaming: Bool
     let isPreviewVisible: Bool
+    let sourceType: StreamSourceType
     let onRecord: () -> Void
     let onTogglePreview: () -> Void
     let onSwitchCamera: () -> Void
@@ -349,7 +426,7 @@ struct BottomControlsView: View {
     
     var body: some View {
         HStack(spacing: 0) {
-            // Left side - Preview toggle & Torch
+            // Left side - Preview toggle & Torch (only show torch for camera)
             HStack(spacing: 20) {
                 // Preview toggle (eye)
                 Button(action: onTogglePreview) {
@@ -365,8 +442,8 @@ struct BottomControlsView: View {
                 .buttonStyle(.plain)
                 
                 #if os(iOS)
-                // Torch - iOS only (Macs don't have torch)
-                if isTorchAvailable {
+                // Torch - iOS only and only for camera source
+                if sourceType == .camera && isTorchAvailable {
                     Button(action: onTorch) {
                         VStack(spacing: 4) {
                             Image(systemName: isTorchOn ? "flashlight.on.fill" : "flashlight.off.fill")
@@ -407,21 +484,23 @@ struct BottomControlsView: View {
             }
             .buttonStyle(.plain)
             
-            // Right side - Switch Camera
+            // Right side - Switch Camera (only for camera source)
             HStack(spacing: 20) {
                 #if os(iOS)
-                // Switch camera - only on iOS devices with multiple cameras
-                Button(action: onSwitchCamera) {
-                    VStack(spacing: 4) {
-                        Image(systemName: "arrow.triangle.2.circlepath.camera.fill")
-                            .font(.system(size: 24))
-                        Text("FLIP")
-                            .font(.system(size: 9, weight: .medium))
+                // Switch camera - only for camera source
+                if sourceType == .camera {
+                    Button(action: onSwitchCamera) {
+                        VStack(spacing: 4) {
+                            Image(systemName: "arrow.triangle.2.circlepath.camera.fill")
+                                .font(.system(size: 24))
+                            Text("FLIP")
+                                .font(.system(size: 9, weight: .medium))
+                        }
+                        .foregroundColor(.white)
+                        .frame(width: 50, height: 50)
                     }
-                    .foregroundColor(.white)
-                    .frame(width: 50, height: 50)
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
                 #endif
             }
             .frame(maxWidth: .infinity)

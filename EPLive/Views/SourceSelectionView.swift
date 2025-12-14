@@ -2,317 +2,193 @@
 //  SourceSelectionView.swift
 //  EPLive
 //
-//  View for selecting streaming source (Camera, Screen, Window)
+//  Initial splash view for selecting stream source
 //
 
 import SwiftUI
 
 struct SourceSelectionView: View {
     @ObservedObject var viewModel: StreamViewModel
-    @Environment(\.dismiss) private var dismiss
-    
-    @State private var selectedSourceType: StreamSourceType
-    @State private var availableScreens: [ScreenInfo] = []
-    @State private var availableWindows: [WindowInfo] = []
-    @State private var selectedScreen: ScreenInfo?
-    @State private var selectedWindow: WindowInfo?
-    
-    init(viewModel: StreamViewModel) {
-        self.viewModel = viewModel
-        _selectedSourceType = State(initialValue: viewModel.currentSourceType)
-    }
+    @Binding var showLocalVideoPicker: Bool
+    @State private var showSettings = false
     
     var body: some View {
-        #if os(macOS)
-        macOSView
-        #else
-        iOSView
-        #endif
-    }
-    
-    #if os(macOS)
-    private var macOSView: some View {
-        VStack(spacing: 20) {
-            Text("Seleziona Sorgente Streaming")
-                .font(.title2)
-                .fontWeight(.bold)
+        ZStack {
+            // Gradient background
+            LinearGradient(
+                gradient: Gradient(colors: [Color.black, Color.blue.opacity(0.3), Color.black]),
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
             
-            // Source type picker
-            Picker("Tipo Sorgente", selection: $selectedSourceType) {
-                Text("📷 Camera").tag(StreamSourceType.camera)
-                Text("🖥️ Schermo").tag(StreamSourceType.screen)
-                Text("🪟 Finestra").tag(StreamSourceType.window)
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-            .onChange(of: selectedSourceType) { newValue in
-                loadAvailableSources(for: newValue)
-            }
-            
-            Divider()
-            
-            // Source-specific options
-            Group {
-                switch selectedSourceType {
-                case .camera:
-                    cameraOptionsView
-                    
-                case .screen:
-                    screenOptionsView
-                    
-                case .window:
-                    windowOptionsView
-                }
-            }
-            .frame(minHeight: 200)
-            
-            Spacer()
-            
-            // Action buttons
-            HStack(spacing: 12) {
-                Button("Annulla") {
-                    dismiss()
-                }
-                .keyboardShortcut(.cancelAction)
-                
-                Button("Applica") {
-                    applySourceSelection()
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!canApply)
-            }
-            .padding()
-        }
-        .frame(width: 500, height: 400)
-        .onAppear {
-            loadAvailableSources(for: selectedSourceType)
-        }
-    }
-    #else
-    private var iOSView: some View {
-        NavigationView {
-            Form {
-                Section("Tipo Sorgente") {
-                    Picker("Sorgente", selection: $selectedSourceType) {
-                        Text("📷 Camera").tag(StreamSourceType.camera)
+            // Settings button in top right
+            VStack {
+                HStack {
+                    Spacer()
+                    Button(action: { showSettings = true }) {
+                        Image(systemName: "gearshape.fill")
+                            .font(.system(size: 24))
+                            .foregroundColor(.white)
+                            .padding()
+                            .background(Color.black.opacity(0.3))
+                            .clipShape(Circle())
                     }
-                    .pickerStyle(.menu)
+                    .padding(.top, 50)
+                    .padding(.trailing, 20)
                 }
-                
-                Section {
-                    cameraOptionsView
-                }
-            }
-            .navigationTitle("Seleziona Sorgente")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Annulla") {
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Applica") {
-                        applySourceSelection()
-                    }
-                    .disabled(!canApply)
-                }
-            }
-            .onAppear {
-                loadAvailableSources(for: selectedSourceType)
-            }
-        }
-    }
-    #endif
-    
-    // MARK: - Source Options Views
-    
-    private var cameraOptionsView: some View {
-        VStack {
-            Image(systemName: "video.fill")
-                .font(.system(size: 60))
-                .foregroundColor(.blue)
-            
-            Text("Camera")
-                .font(.headline)
-                .padding(.top, 8)
-            
-            Text("Streaming dalla fotocamera del dispositivo")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-    
-    #if os(macOS)
-    private var screenOptionsView: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Schermi Disponibili")
-                .font(.headline)
-            
-            if availableScreens.isEmpty {
-                Text("Nessuno schermo disponibile")
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-            } else {
-                List(availableScreens) { screen in
-                    HStack {
-                        Image(systemName: screen.isMain ? "tv.fill" : "tv")
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(screen.name)
-                                .font(.body)
-                            Text("\(Int(screen.width)) × \(Int(screen.height))")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        Spacer()
-                        if selectedScreen?.id == screen.id {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.blue)
-                        }
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        selectedScreen = screen
-                    }
-                }
-            }
-        }
-        .padding(.horizontal)
-    }
-    
-    private var windowOptionsView: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Finestre Disponibili")
-                    .font(.headline)
                 Spacer()
-                Button(action: {
-                    loadAvailableSources(for: .window)
-                }) {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.plain)
             }
             
-            if availableWindows.isEmpty {
-                Text("Nessuna finestra disponibile")
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-            } else {
-                List(availableWindows) { window in
-                    HStack {
-                        Image(systemName: "macwindow")
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(window.title)
-                                .font(.body)
-                                .lineLimit(1)
-                            HStack(spacing: 8) {
-                                Text(window.ownerName)
+            VStack(spacing: 40) {
+                Spacer()
+                
+                // Logo/Title
+                VStack(spacing: 16) {
+                    Image(systemName: "waveform.circle.fill")
+                        .font(.system(size: 100))
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [.blue, .cyan],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                    
+                    Text("EPLive")
+                        .font(.system(size: 48, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                    
+                    Text("Professional Streaming")
+                        .font(.subheadline)
+                        .foregroundColor(.white.opacity(0.7))
+                    
+                    Text("v\(AppVersion.current)")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.5))
+                }
+                
+                Spacer()
+                
+                // Source selection buttons
+                VStack(spacing: 20) {
+                    Text("Seleziona Sorgente")
+                        .font(.headline)
+                        .foregroundColor(.white.opacity(0.9))
+                    
+                    // Camera button
+                    Button(action: {
+                        Task {
+                            await viewModel.activateCameraSource()
+                        }
+                    }) {
+                        HStack(spacing: 16) {
+                            Image(systemName: "camera.fill")
+                                .font(.system(size: 28))
+                            
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Camera")
+                                    .font(.headline)
+                                Text("Trasmetti in diretta dalla fotocamera")
                                     .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text("•")
-                                    .foregroundColor(.secondary)
-                                Text("\(Int(window.bounds.width)) × \(Int(window.bounds.height))")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .opacity(0.8)
                             }
+                            
+                            Spacer()
+                            
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 16, weight: .semibold))
                         }
-                        Spacer()
-                        if selectedWindow?.id == window.id {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.blue)
+                        .foregroundColor(.white)
+                        .padding(20)
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            LinearGradient(
+                                colors: [Color.blue.opacity(0.8), Color.blue],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .cornerRadius(16)
+                        .shadow(color: .blue.opacity(0.3), radius: 10, x: 0, y: 5)
+                    }
+                    .disabled(!viewModel.cameraPermissionGranted)
+                    .opacity(viewModel.cameraPermissionGranted ? 1.0 : 0.5)
+                    
+                    // Local video button
+                    Button(action: {
+                        showLocalVideoPicker = true
+                    }) {
+                        HStack(spacing: 16) {
+                            Image(systemName: "film.fill")
+                                .font(.system(size: 28))
+                            
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Video Locale")
+                                    .font(.headline)
+                                Text("Trasmetti un file video dal dispositivo")
+                                    .font(.caption)
+                                    .opacity(0.8)
+                            }
+                            
+                            Spacer()
+                            
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 16, weight: .semibold))
                         }
+                        .foregroundColor(.white)
+                        .padding(20)
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            LinearGradient(
+                                colors: [Color.orange.opacity(0.8), Color.orange],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .cornerRadius(16)
+                        .shadow(color: .orange.opacity(0.3), radius: 10, x: 0, y: 5)
                     }
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        selectedWindow = window
+                    
+                    // Permission warning
+                    if !viewModel.cameraPermissionGranted {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.yellow)
+                            Text("Permessi camera non concessi")
+                                .font(.caption)
+                                .foregroundColor(.yellow)
+                        }
+                        .padding(.top, 8)
                     }
                 }
-            }
-        }
-        .padding(.horizontal)
-    }
-    #endif
-    
-    // MARK: - Helper Methods
-    
-    private func loadAvailableSources(for sourceType: StreamSourceType) {
-        #if os(macOS)
-        switch sourceType {
-        case .screen:
-            availableScreens = ScreenInfo.availableScreens()
-            if selectedScreen == nil {
-                selectedScreen = availableScreens.first(where: { $0.isMain }) ?? availableScreens.first
-            }
-            
-        case .window:
-            availableWindows = WindowInfo.availableWindows()
-            
-        case .camera:
-            break
-        }
-        #endif
-    }
-    
-    private var canApply: Bool {
-        switch selectedSourceType {
-        case .camera:
-            return true
-        case .screen:
-            #if os(macOS)
-            return selectedScreen != nil
-            #else
-            return false
-            #endif
-        case .window:
-            #if os(macOS)
-            return selectedWindow != nil
-            #else
-            return false
-            #endif
-        }
-    }
-    
-    private func applySourceSelection() {
-        Task {
-            let config: StreamSourceConfig?
-            
-            switch selectedSourceType {
-            case .camera:
-                config = nil
+                .padding(.horizontal, 30)
                 
-            case .screen:
-                #if os(macOS)
-                if let screen = selectedScreen {
-                    config = StreamSourceConfig(source: .screen(screen))
-                } else {
-                    config = nil
-                }
-                #else
-                config = nil
-                #endif
+                Spacer()
                 
-            case .window:
-                #if os(macOS)
-                if let window = selectedWindow {
-                    config = StreamSourceConfig(source: .window(window))
-                } else {
-                    config = nil
+                // Server info
+                if let server = viewModel.currentServer {
+                    VStack(spacing: 4) {
+                        Text("Server: \(server.name)")
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.6))
+                        Text(server.url)
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.4))
+                    }
+                    .padding(.bottom, 20)
                 }
-                #else
-                config = nil
-                #endif
             }
-            
-            await viewModel.switchSource(to: selectedSourceType, config: config)
-            dismiss()
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView(viewModel: viewModel)
         }
     }
 }
 
 #Preview {
-    SourceSelectionView(viewModel: StreamViewModel())
+    SourceSelectionView(
+        viewModel: StreamViewModel(),
+        showLocalVideoPicker: .constant(false)
+    )
 }

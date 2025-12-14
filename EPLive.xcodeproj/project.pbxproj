@@ -22,6 +22,10 @@
 		B50015 /* CameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B50116 /* CameraPreviewView.swift */; };
 		B50018 /* VideoQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = B50120 /* VideoQuality.swift */; };
 		B50021 /* StreamingSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B50121 /* StreamingSettings.swift */; };
+		B50022 /* LocalVideoStreamer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B50122 /* LocalVideoStreamer.swift */; };
+		B50023 /* LocalVideoPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B50123 /* LocalVideoPickerView.swift */; };
+		B50024 /* StreamSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = B50124 /* StreamSource.swift */; };
+		B50025 /* SourceSelectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B50125 /* SourceSelectionView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -40,6 +44,10 @@
 		B50116 /* CameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPreviewView.swift; sourceTree = "<group>"; };
 		B50120 /* VideoQuality.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoQuality.swift; sourceTree = "<group>"; };
 		B50121 /* StreamingSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamingSettings.swift; sourceTree = "<group>"; };
+		B50122 /* LocalVideoStreamer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalVideoStreamer.swift; sourceTree = "<group>"; };
+		B50123 /* LocalVideoPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalVideoPickerView.swift; sourceTree = "<group>"; };
+		B50124 /* StreamSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamSource.swift; sourceTree = "<group>"; };
+		B50125 /* SourceSelectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceSelectionView.swift; sourceTree = "<group>"; };
 		B50200 /* EPLive.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EPLive.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -95,6 +103,8 @@
 				B50104 /* ServerListView.swift */,
 				B50105 /* ServerEditView.swift */,
 				B50116 /* CameraPreviewView.swift */,
+				B50123 /* LocalVideoPickerView.swift */,
+				B50125 /* SourceSelectionView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -112,6 +122,7 @@
 			children = (
 				B50107 /* CameraManager.swift */,
 				B50109 /* ServerManager.swift */,
+				B50122 /* LocalVideoStreamer.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -122,6 +133,7 @@
 				B50110 /* SRTServer.swift */,
 				B50120 /* VideoQuality.swift */,
 				B50121 /* StreamingSettings.swift */,
+				B50124 /* StreamSource.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -208,10 +220,14 @@
 				B50004 /* ServerListView.swift in Sources */,
 				B50005 /* ServerEditView.swift in Sources */,
 				B50015 /* CameraPreviewView.swift in Sources */,
+				B50023 /* LocalVideoPickerView.swift in Sources */,
+				B50025 /* SourceSelectionView.swift in Sources */,
 				B50006 /* StreamViewModel.swift in Sources */,
 				B50007 /* CameraManager.swift in Sources */,
+				B50022 /* LocalVideoStreamer.swift in Sources */,
 				B50018 /* VideoQuality.swift in Sources */,
 				B50021 /* StreamingSettings.swift in Sources */,
+				B50024 /* StreamSource.swift in Sources */,
 				B50009 /* ServerManager.swift in Sources */,
 				B50010 /* SRTServer.swift in Sources */,
 			);
@@ -226,6 +242,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = EPLive/EPLive.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = T4T6H838Y2;
@@ -266,6 +284,8 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = EPLive/EPLive.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = T4T6H838Y2;

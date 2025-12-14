@@ -13,14 +13,16 @@ import AppKit
 // MARK: - Stream Source Type
 public enum StreamSourceType: String, CaseIterable, Identifiable {
     case camera = "Camera"
+    case localVideo = "Video Locale"
     case screen = "Schermo Intero"
     case window = "Finestra Specifica"
     
-    var id: String { rawValue }
+    public var id: String { rawValue }
     
     var icon: String {
         switch self {
         case .camera: return "camera.fill"
+        case .localVideo: return "film"
         case .screen: return "rectangle.on.rectangle"
         case .window: return "macwindow"
         }
@@ -29,9 +31,19 @@ public enum StreamSourceType: String, CaseIterable, Identifiable {
     var description: String {
         switch self {
         case .camera: return "Cattura dalla webcam"
+        case .localVideo: return "Trasmetti un file video"
         case .screen: return "Cattura tutto lo schermo"
         case .window: return "Cattura una finestra specifica"
         }
+    }
+    
+    // iOS supports only camera and local video
+    static var availableOnCurrentPlatform: [StreamSourceType] {
+        #if os(iOS)
+        return [.camera, .localVideo]
+        #else
+        return allCases
+        #endif
     }
 }
 
@@ -130,9 +142,11 @@ public struct WindowInfo: Identifiable, Hashable {
 
 // MARK: - Stream Source Configuration
 public struct StreamSourceConfig: Identifiable {
-    let id = UUID()
-    let type: StreamSourceType
+    public let id = UUID()
+    public let type: StreamSourceType
     var cameraDeviceID: String?
+    var localVideoURL: URL?
+    var loopVideo: Bool = true
     #if os(macOS)
     var screenID: CGDirectDisplayID?
     var windowNumber: Int?
@@ -142,6 +156,8 @@ public struct StreamSourceConfig: Identifiable {
         switch type {
         case .camera:
             return cameraDeviceID ?? "Webcam"
+        case .localVideo:
+            return localVideoURL?.lastPathComponent ?? "Video Locale"
         case .screen:
             #if os(macOS)
             if let screenID = screenID {
