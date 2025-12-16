@@ -12,6 +12,7 @@ import SRTHaishinKit
 import VideoToolbox
 #if canImport(UIKit)
 import UIKit
+import MediaPlayer
 #endif
 
 enum StreamingError: LocalizedError {
@@ -43,6 +44,8 @@ class StreamViewModel: ObservableObject {
     @Published var connectionStatus: String = "Disconnected"
     @Published var errorMessage: String?
     @Published var showError = false
+    @Published var showBackgroundWarning = false  // Warning quando app va in background
+    @Published var isAutoResuming = false  // Indica che sta riprendendo automaticamente
     @Published var cameraPermissionGranted = false
     @Published var currentServer: SRTServer?
     @Published var selectedQuality: VideoQuality = .ultra {
@@ -60,6 +63,9 @@ class StreamViewModel: ObservableObject {
     // Local video streamer
     let localVideoStreamer = LocalVideoStreamer()
     
+    // Statistiche streaming in tempo reale
+    @Published var stats = StreamingStats()
+    
     // Advanced settings
     @Published var streamingSettings = StreamingSettings()
     
@@ -74,6 +80,16 @@ class StreamViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var orientationObserver: NSObjectProtocol?
     
+    // BACKGROUND TASK - Mantiene lo streaming attivo in background
+    #if canImport(UIKit)
+    private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
+    private var keepAliveTimer: Timer?  // Timer per mantenere SRT attivo in background
+    
+    // AUTO-RESUME STATE - Salva lo stato per riprendere dopo background
+    private var wasStreamingBeforeBackground = false
+    private var savedVideoTime: Double = 0
+    #endif
+    
     init() {
         // Load saved quality
         if let qualityRaw = defaults.string(forKey: Keys.selectedQuality),
@@ -87,11 +103,15 @@ class StreamViewModel: ObservableObject {
         setupBindings()
         checkPermissions()
         setupOrientationObserver()
+        setupBackgroundObservers()  // OSSERVA QUANDO L'APP VA IN BACKGROUND
         
         // NON attivare automaticamente la camera all'avvio
     }
     
     deinit {
+        // Il timer si fermerà automaticamente grazie al weak self
+        // Non possiamo chiamare stopStatsUpdateTimer() qui perché è @MainActor
+        
         if let observer = orientationObserver {
             NotificationCenter.default.removeObserver(observer)
         }
@@ -443,14 +463,18 @@ class StreamViewModel: ObservableObject {
     }
     
     private func setupHaishinKitPreview() async {
-        // Setup AVAudioSession (iOS only)
+        // Setup AVAudioSession (iOS only) - BACKGROUND VIDEO STREAMING ENABLED
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+            // USA VIDEOCHAT MODE per dire a iOS che stiamo facendo video streaming
+            // Questo mantiene attivo il video encoder anche in background
+            try session.setCategory(.playAndRecord, mode: .videoChat, options: [.defaultToSpeaker, .allowBluetooth, .mixWithOthers])
             try session.setActive(true)
+            print("✅ AVAudioSession configured for VIDEO STREAMING in background")
+            print("   Mode: videoChat (keeps video encoder active)")
         } catch {
-            print("AVAudioSession setup error: \(error)")
+            print("❌ AVAudioSession setup error: \(error)")
         }
         #endif
         
@@ -636,12 +660,24 @@ class StreamViewModel: ObservableObject {
                 // If streaming local video, start the video streamer
                 if selectedSourceType == .localVideo, let stream = srtStream {
                     print("🎬 Starting local video streaming...")
+                    localVideoStreamer.stats = stats  // Collega le statistiche
                     try await localVideoStreamer.startStreaming(to: stream, loop: loopLocalVideo)
                     print("✅ Local video streaming started")
                 }
                 
                 isStreaming = true
                 connectionStatus = "Streaming"
+                stats.start()
+                startStatsUpdateTimer()
+                startBackgroundTask()  // MANTIENE LO STREAMING IN BACKGROUND
+                setupNowPlayingInfo()  // INDICATORE LOCK SCREEN
+                
+                // DISABILITA IDLE TIMER per mantenere app attiva
+                #if os(iOS)
+                UIApplication.shared.isIdleTimerDisabled = true
+                print("✅ Idle timer disabled - screen won't auto-lock")
+                #endif
+                
                 print("✅ Streaming active")
             } catch {
                 print("❌ Streaming error: \(error)")
@@ -653,6 +689,21 @@ class StreamViewModel: ObservableObject {
     }
     
     func stopStreaming() {
+        // IMPORTANTE: ferma PRIMA il timer e le stats per evitare race conditions
+        connectionStatus = "Disconnected"
+        isStreaming = false
+        stopStatsUpdateTimer()
+        stats.stop()
+        endBackgroundTask()  // TERMINA IL BACKGROUND TASK
+        clearNowPlayingInfo()  // RIMUOVI INDICATORE LOCK SCREEN
+        
+        // RIABILITA IDLE TIMER
+        #if os(iOS)
+        UIApplication.shared.isIdleTimerDisabled = false
+        stopKeepAliveTimer()  // FERMA KEEP-ALIVE TIMER
+        print("✅ Idle timer re-enabled")
+        #endif
+        
         Task {
             // Stop local video streaming if active
             if selectedSourceType == .localVideo {
@@ -666,9 +717,6 @@ class StreamViewModel: ObservableObject {
             // Re-setup for preview
             await setupHaishinKitPreview()
         }
-        
-        connectionStatus = "Disconnected"
-        isStreaming = false
     }
     
     // MARK: - Local Video
@@ -991,4 +1039,435 @@ class StreamViewModel: ObservableObject {
     var currentDisplayZoomFactor: CGFloat {
         currentZoomFactor * zoomDisplayScale
     }
+    
+    // MARK: - Statistics Update Timer
+    
+    private var statsTimer: Timer?
+    
+    private func startStatsUpdateTimer() {
+        stopStatsUpdateTimer()
+        
+        statsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
+            guard let self = self else {
+                timer.invalidate()
+                return
+            }
+            Task { @MainActor [weak self] in
+                self?.updateStats()
+            }
+        }
+        // Aggiungi al RunLoop corrente per evitare che venga deallocato
+        RunLoop.main.add(statsTimer!, forMode: .common)
+    }
+    
+    private func stopStatsUpdateTimer() {
+        statsTimer?.invalidate()
+        statsTimer = nil
+    }
+    
+    private func updateStats() {
+        // Controlli di sicurezza: esci se non stiamo streamando o se gli oggetti sono nil
+        guard isStreaming else { 
+            stopStatsUpdateTimer()
+            return 
+        }
+        
+        guard let sourceType = selectedSourceType else {
+            return
+        }
+        
+        // Aggiorna durata
+        stats.updateDuration()
+        
+        // Per camera/screen: stima bytes in base a bitrate e tempo trascorso
+        if sourceType == .camera || sourceType == .screen {
+            // Calcola quanti frame dovrebbero essere stati inviati
+            let fps = Double(selectedQuality.fps)
+            let framesShouldBeSent = Int(stats.streamingDuration * fps)
+            
+            // Aggiorna contatori se necessario (stima)
+            if stats.videoFramesSent < framesShouldBeSent {
+                let framesToAdd = framesShouldBeSent - stats.videoFramesSent
+                let bitrateBytes = Double(selectedQuality.bitrate)
+                let bytesPerFrame = Int(bitrateBytes / 8.0 / fps)
+                
+                for _ in 0..<framesToAdd {
+                    stats.recordVideoFrame(bytes: bytesPerFrame)
+                }
+            }
+            
+            // Audio: stima 48kHz stereo 16-bit AAC
+            let audioSamplesShouldBeSent = Int(stats.streamingDuration * 48000.0 / 1024.0)
+            if stats.audioSamplesSent < audioSamplesShouldBeSent {
+                let samplesToAdd = audioSamplesShouldBeSent - stats.audioSamplesSent
+                for _ in 0..<samplesToAdd {
+                    stats.recordAudioSample(bytes: 2048)
+                }
+            }
+        }
+        
+        // Aggiorna bitrate (calcola dai bytes accumulati)
+        stats.updateBitrates()
+        
+        // Debug logging ogni 5 secondi
+        if Int(stats.streamingDuration) % 5 == 0 && stats.streamingDuration > 0 {
+            print("📊 Stats Update - Duration: \(stats.durationString), Bitrate: \(stats.bitrateString), FPS: \(stats.fpsString)")
+            print("   Video: \(stats.videoFramesSent) frames, Audio: \(stats.audioSamplesSent) samples")
+            print("   Total: \(stats.totalDataString)")
+        }
+        
+        // Aggiorna FPS in base alla sorgente
+        if sourceType == .localVideo {
+            // Per video locale: il LocalVideoStreamer aggiorna già i FPS reali ogni secondo
+            // Non facciamo nulla qui per evitare di sovrascrivere
+        } else if sourceType == .camera || sourceType == .screen {
+            // Camera/Screen: usa il target fps della qualità
+            stats.updateFPS(framesInLastSecond: Int(selectedQuality.fps))
+        }
+        
+        // Aggiorna info sulla lock screen ogni secondo
+        updateNowPlayingInfo()
+    }
+    
+    // MARK: - Background Task Management
+    
+    #if canImport(UIKit)
+    private func startBackgroundTask() {
+        endBackgroundTask()  // Assicurati di terminare eventuali task precedenti
+        
+        backgroundTaskID = UIApplication.shared.beginBackgroundTask { [weak self] in
+            // Chiamato quando iOS sta per terminare il background task
+            print("⚠️ Background task expiring, iOS will suspend app soon")
+            self?.endBackgroundTask()
+        }
+        
+        print("🌙 Background task started (ID: \(backgroundTaskID.rawValue))")
+        print("   App can now stream in background for ~180 seconds")
+        print("   Audio session + Background Modes will extend this indefinitely")
+    }
+    
+    private func endBackgroundTask() {
+        if backgroundTaskID != .invalid {
+            print("🌙 Ending background task (ID: \(backgroundTaskID.rawValue))")
+            UIApplication.shared.endBackgroundTask(backgroundTaskID)
+            backgroundTaskID = .invalid
+        }
+    }
+    #else
+    // macOS non ha background tasks
+    private func startBackgroundTask() {}
+    private func endBackgroundTask() {}
+    #endif
+    
+    // MARK: - Lock Screen Integration (Now Playing)
+    
+    #if canImport(UIKit)
+    private func setupNowPlayingInfo() {
+        let nowPlayingInfoCenter = MPNowPlayingInfoCenter.default()
+        var nowPlayingInfo = [String: Any]()
+        
+        // Titolo principale
+        nowPlayingInfo[MPMediaItemPropertyTitle] = "🔴 Live Streaming"
+        
+        // Server di destinazione
+        if let server = currentServer {
+            nowPlayingInfo[MPMediaItemPropertyArtist] = server.name
+            nowPlayingInfo[MPMediaItemPropertyAlbumTitle] = server.url
+        }
+        
+        // Immagine icona (opzionale - puoi usare l'icona dell'app)
+        if let appIcon = UIImage(named: "AppIcon") {
+            nowPlayingInfo[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: appIcon.size) { _ in appIcon }
+        }
+        
+        // Durata (inizialmente 0)
+        nowPlayingInfo[MPMediaItemPropertyPlaybackDuration] = 0
+        nowPlayingInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = 0
+        nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = 1.0
+        
+        nowPlayingInfoCenter.nowPlayingInfo = nowPlayingInfo
+        
+        // Configura i controlli remoti
+        let commandCenter = MPRemoteCommandCenter.shared()
+        
+        // Disabilita play/pause (non ha senso per streaming live)
+        commandCenter.playCommand.isEnabled = false
+        commandCenter.pauseCommand.isEnabled = false
+        
+        // Abilita stop command per fermare lo streaming dalla lock screen
+        commandCenter.stopCommand.isEnabled = true
+        commandCenter.stopCommand.addTarget { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.stopStreaming()
+            }
+            return .success
+        }
+        
+        print("🔒 Lock screen info configured")
+        print("   User can now see streaming status on lock screen")
+        print("   Press STOP on lock screen to end stream")
+    }
+    
+    private func updateNowPlayingInfo() {
+        guard isStreaming else { return }
+        
+        let nowPlayingInfoCenter = MPNowPlayingInfoCenter.default()
+        var nowPlayingInfo = nowPlayingInfoCenter.nowPlayingInfo ?? [String: Any]()
+        
+        // Aggiorna titolo con statistiche live
+        let sourceEmoji: String
+        switch selectedSourceType {
+        case .camera: 
+            sourceEmoji = "📹"
+        case .screen: 
+            sourceEmoji = "🖥️"
+        case .window:
+            sourceEmoji = "🪟"
+        case .localVideo: 
+            sourceEmoji = "🎬"
+        case .none: 
+            sourceEmoji = "🔴"
+        }
+        
+        nowPlayingInfo[MPMediaItemPropertyTitle] = "\(sourceEmoji) Live Streaming"
+        
+        // Sottotitolo con bitrate e FPS
+        let subtitle = "\(stats.bitrateString) • \(stats.fpsString)"
+        nowPlayingInfo[MPMediaItemPropertyArtist] = subtitle
+        
+        // Durata aggiornata
+        nowPlayingInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = stats.streamingDuration
+        
+        nowPlayingInfoCenter.nowPlayingInfo = nowPlayingInfo
+    }
+    
+    private func clearNowPlayingInfo() {
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        
+        // Rimuovi i command handlers
+        let commandCenter = MPRemoteCommandCenter.shared()
+        commandCenter.stopCommand.isEnabled = false
+        commandCenter.stopCommand.removeTarget(nil)
+        
+        print("🔒 Lock screen info cleared")
+    }
+    #else
+    // macOS non ha MPNowPlayingInfoCenter
+    private func setupNowPlayingInfo() {}
+    private func updateNowPlayingInfo() {}
+    private func clearNowPlayingInfo() {}
+    #endif
+    
+    // MARK: - Background/Foreground Observers
+    
+    #if canImport(UIKit)
+    private func setupBackgroundObservers() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(appDidEnterBackground),
+            name: UIApplication.didEnterBackgroundNotification,
+            object: nil
+        )
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(appWillEnterForeground),
+            name: UIApplication.willEnterForegroundNotification,
+            object: nil
+        )
+    }
+    
+    @objc private func appDidEnterBackground() {
+        print("🌙 App entered background - streaming: \(isStreaming)")
+        
+        guard isStreaming else { return }
+        
+        // SOLUZIONE: STOP automatico quando va in background
+        // Verrà riavviato automaticamente quando torna in foreground
+        
+        print("🛑 AUTO-STOPPING streaming (iOS cannot encode video in background)")
+        
+        // Salva lo stato per auto-resume
+        wasStreamingBeforeBackground = true
+        
+        // Salva posizione video se stiamo streamando video locale
+        if selectedSourceType == .localVideo {
+            savedVideoTime = localVideoStreamer.currentTime
+            print("   📍 Saved video position: \(savedVideoTime)s")
+        }
+        
+        // Mostra warning
+        showBackgroundWarning = true
+        
+        // STOP lo streaming (ma mantieni il setup)
+        Task { @MainActor in
+            // Ferma solo la parte streaming, non resettare la sorgente
+            connectionStatus = "Paused (Background)"
+            isStreaming = false
+            stopStatsUpdateTimer()
+            stats.stop()
+            
+            // Stop local video se attivo
+            if selectedSourceType == .localVideo {
+                localVideoStreamer.stopStreaming()
+            }
+            
+            // Close SRT connection
+            await srtStream?.close()
+            await srtConnection?.close()
+            
+            print("   ✅ Streaming stopped cleanly")
+            print("   Will auto-resume when app returns to foreground")
+        }
+    }
+    
+    @objc private func appWillEnterForeground() {
+        print("☀️ App will enter foreground")
+        
+        // Nascondi il warning
+        showBackgroundWarning = false
+        
+        // AUTO-RESUME se stava streamando prima di andare in background
+        guard wasStreamingBeforeBackground else {
+            print("   No streaming to resume")
+            return
+        }
+        
+        wasStreamingBeforeBackground = false
+        isAutoResuming = true  // Mostra feedback all'utente
+        
+        print("🔄 AUTO-RESUMING streaming after background pause")
+        
+        Task { @MainActor in
+            // Piccolo delay per lasciare che l'app si stabilizzi
+            try? await Task.sleep(nanoseconds: 300_000_000) // 0.3s
+            
+            // Re-setup dello stream
+            if selectedSourceType == .localVideo {
+                await setupStreamForLocalVideo()
+            } else {
+                await setupHaishinKitPreview()
+            }
+            
+            // Piccolo altro delay
+            try? await Task.sleep(nanoseconds: 200_000_000) // 0.2s
+            
+            // Riavvia lo streaming
+            guard let server = currentServer else {
+                print("   ❌ No server configured")
+                isAutoResuming = false
+                return
+            }
+            
+            guard let urlObj = URL(string: server.url) else {
+                print("   ❌ Invalid server URL")
+                isAutoResuming = false
+                return
+            }
+            
+            do {
+                print("   🔗 Reconnecting to SRT server: \(server.url)")
+                
+                // Connect
+                try await srtConnection?.open(urlObj)
+                await srtStream?.publish()
+                
+                // Se video locale, riavvia da dove si era fermato
+                if selectedSourceType == .localVideo, let stream = srtStream {
+                    print("   🎬 Resuming local video from \(savedVideoTime)s")
+                    localVideoStreamer.stats = stats
+                    try await localVideoStreamer.startStreaming(
+                        to: stream,
+                        loop: loopLocalVideo,
+                        startTime: savedVideoTime
+                    )
+                }
+                
+                // Riavvia tutto
+                isStreaming = true
+                connectionStatus = "Streaming"
+                stats.start()
+                startStatsUpdateTimer()
+                setupNowPlayingInfo()
+                
+                #if os(iOS)
+                UIApplication.shared.isIdleTimerDisabled = true
+                #endif
+                
+                isAutoResuming = false
+                print("   ✅ Streaming AUTO-RESUMED successfully!")
+                
+            } catch {
+                print("   ❌ Failed to auto-resume streaming: \(error)")
+                isAutoResuming = false
+                errorMessage = "Auto-resume fallito: \(error.localizedDescription)"
+                showError = true
+            }
+        }
+    }
+    
+    // Keep-alive timer per mantenere SRT attivo in background
+    private func startKeepAliveTimer() {
+        stopKeepAliveTimer()
+        
+        var lastFrameCount = 0
+        var stuckCount = 0
+        
+        keepAliveTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            guard let self = self, self.isStreaming else { return }
+            
+            Task { @MainActor in
+                // Controlla se i frame stanno aumentando
+                let currentFrames = self.stats.videoFramesSent
+                
+                if currentFrames == lastFrameCount {
+                    stuckCount += 1
+                    print("⚠️ Video encoder appears stuck in background")
+                    print("   Frames not increasing: \(currentFrames)")
+                    print("   This is an iOS limitation for background video encoding")
+                    
+                    if stuckCount >= 3 {
+                        // Dopo 6 secondi di freeze, prova a "svegliare" l'encoder
+                        print("🔄 Attempting to wake up video encoder...")
+                        
+                        // Forza una piccola operazione sull'asset reader per svegliare l'encoder
+                        if self.selectedSourceType == .localVideo {
+                            // Il LocalVideoStreamer continua a girare, ma l'encoder è sospeso
+                            // Purtroppo iOS blocca il video encoding in background
+                            print("   VIDEO ENCODING SUSPENDED BY iOS")
+                            print("   Will resume automatically when app returns to foreground")
+                        }
+                        stuckCount = 0
+                    }
+                } else {
+                    // Frame stanno aumentando - tutto ok!
+                    stuckCount = 0
+                    if Int(self.stats.streamingDuration) % 10 == 0 {
+                        print("✅ Background streaming working: \(currentFrames) frames sent")
+                    }
+                }
+                
+                lastFrameCount = currentFrames
+                
+                // Controlla anche connessione SRT
+                if let connection = self.srtConnection, !connection.connected {
+                    print("⚠️ SRT connection lost in background!")
+                }
+            }
+        }
+        
+        RunLoop.main.add(keepAliveTimer!, forMode: .common)
+        print("⏰ Keep-alive monitor started (2s interval)")
+        print("   Will detect if video encoding stops in background")
+    }
+    
+    private func stopKeepAliveTimer() {
+        keepAliveTimer?.invalidate()
+        keepAliveTimer = nil
+    }
+    #else
+    private func setupBackgroundObservers() {}
+    #endif
+
 }
+

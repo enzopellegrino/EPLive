@@ -29,6 +29,8 @@
 		B50026 /* VideoPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B50126 /* VideoPreviewView.swift */; };
 		B50027 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B50127 /* AppDelegate.swift */; };
 		B50028 /* LocalVideoStreamingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B50128 /* LocalVideoStreamingView.swift */; };
+		B50029 /* StreamingStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = B50129 /* StreamingStats.swift */; };
+		B50030 /* StatsOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B50130 /* StatsOverlayView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -54,6 +56,8 @@
 		B50126 /* VideoPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPreviewView.swift; sourceTree = "<group>"; };
 		B50127 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		B50128 /* LocalVideoStreamingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalVideoStreamingView.swift; sourceTree = "<group>"; };
+		B50129 /* StreamingStats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamingStats.swift; sourceTree = "<group>"; };
+		B50130 /* StatsOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsOverlayView.swift; sourceTree = "<group>"; };
 		B50200 /* EPLive.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EPLive.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -114,6 +118,7 @@
 				B50125 /* SourceSelectionView.swift */,
 				B50126 /* VideoPreviewView.swift */,
 				B50128 /* LocalVideoStreamingView.swift */,
+				B50130 /* StatsOverlayView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -143,6 +148,7 @@
 				B50120 /* VideoQuality.swift */,
 				B50121 /* StreamingSettings.swift */,
 				B50124 /* StreamSource.swift */,
+				B50129 /* StreamingStats.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -234,12 +240,14 @@
 				B50025 /* SourceSelectionView.swift in Sources */,
 				B50026 /* VideoPreviewView.swift in Sources */,
 				B50028 /* LocalVideoStreamingView.swift in Sources */,
+				B50030 /* StatsOverlayView.swift in Sources */,
 				B50006 /* StreamViewModel.swift in Sources */,
 				B50007 /* CameraManager.swift in Sources */,
 				B50022 /* LocalVideoStreamer.swift in Sources */,
 				B50018 /* VideoQuality.swift in Sources */,
 				B50021 /* StreamingSettings.swift in Sources */,
 				B50024 /* StreamSource.swift in Sources */,
+				B50029 /* StreamingStats.swift in Sources */,
 				B50009 /* ServerManager.swift in Sources */,
 				B50010 /* SRTServer.swift in Sources */,
 			);

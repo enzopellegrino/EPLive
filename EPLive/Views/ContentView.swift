@@ -146,6 +146,47 @@ struct ContentView: View {
                             showLocalVideoPicker: $showLocalVideoPicker
                         )
                         
+                        // Stats Overlay - sempre visibile quando streaming è attivo
+                        if viewModel.isStreaming {
+                            StatsOverlayView(stats: viewModel.stats)
+                                .padding(.horizontal, 16)
+                                .padding(.top, 8)
+                        }
+                        
+                        // AUTO-RESUMING BANNER
+                        if viewModel.isAutoResuming {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                                    .tint(.green)
+                                Text("Reconnecting...")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(.white)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(Color.green.opacity(0.3))
+                            .cornerRadius(8)
+                            .padding(.horizontal, 16)
+                        }
+                        // BACKGROUND WARNING BANNER
+                        else if viewModel.showBackgroundWarning {
+                            HStack(spacing: 8) {
+                                Image(systemName: "pause.circle.fill")
+                                    .foregroundColor(.orange)
+                                Text("PAUSED - Will resume when you return")
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(.white)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(Color.orange.opacity(0.3))
+                            .cornerRadius(8)
+                            .padding(.horizontal, 16)
+                        }
+                        
                         Spacer()
                         
                         #if os(iOS)

@@ -134,6 +134,11 @@ struct LocalVideoStreamingView: View {
                 }
                 .padding(.top, 16)
                 
+                // Statistiche streaming
+                StatsOverlayView(stats: viewModel.stats)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 8)
+                
                 Spacer()
                 
                 // Pulsante STOP

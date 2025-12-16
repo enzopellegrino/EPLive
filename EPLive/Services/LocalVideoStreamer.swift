@@ -40,9 +40,16 @@ class LocalVideoStreamer: ObservableObject {
     // Weak reference to avoid retain cycle
     private weak var srtStream: SRTStream?
     
+    // Stats reference (weak to avoid retain cycle)
+    weak var stats: StreamingStats?
+    
     // Frame timing
-    private var videoFrameRate: Double = 30.0
+    private(set) var videoFrameRate: Double = 30.0
     private var lastFrameTime: CFTimeInterval = 0
+    
+    // FPS tracking
+    private var lastFPSUpdate: Date = Date()
+    private var framesSinceLastUpdate: Int = 0
     
     // Cumulative timestamp offset for looping (SRT requires monotonically increasing timestamps)
     private var cumulativeTimeOffset: Double = 0
@@ -104,8 +111,13 @@ class LocalVideoStreamer: ObservableObject {
         self.loopEnabled = loop
         self.isPlaying = true
         
+        // Reset FPS tracking
+        framesSinceLastUpdate = 0
+        lastFPSUpdate = Date()
+        
         print("🎬 Starting video streaming to SRT - loop: \(loop), startTime: \(startTime)s")
         print("📊 Stream object: \(stream)")
+        print("📊 Stats connected: \(stats != nil)")
         
         // Start the streaming task
         streamTask = Task { [weak self] in
@@ -314,6 +326,7 @@ class LocalVideoStreamer: ObservableObject {
         var videoFrameCount = 0
         var audioFrameCount = 0
         var lastVideoPTS: Double = 0
+        var lastAudioPTS: Double = -1
         
         // Frame interval per il video (in nanosecondi)
         let frameIntervalNanos = UInt64(1_000_000_000.0 / videoFrameRate)
@@ -321,13 +334,44 @@ class LocalVideoStreamer: ObservableObject {
         print("🎥 Starting stream at \(String(format: "%.1f", videoFrameRate)) fps (interval: \(frameIntervalNanos/1_000_000)ms)")
         print("⏱️ Cumulative time offset: \(String(format: "%.1f", cumulativeTimeOffset))s")
         
-        // Variabile per tracciare il PTS dell'ultimo audio inviato
-        var lastAudioPTS: Double = -1
+        // ═══════════════════════════════════════════════════════════════════════
+        // AUDIO FIRST: Pre-invia alcuni buffer audio PRIMA del video
+        // Questo permette all'encoder AAC di HaishinKit di inizializzarsi
+        // e garantisce che l'audio sia pronto quando arriva il primo frame video
+        // ═══════════════════════════════════════════════════════════════════════
+        let audioPreBufferCount = 3 // ~70ms di audio (3 buffer * 1024 samples / 44100Hz)
         
-        // Loop principale: leggi e invia frame sincronizzati
+        if let audioOutput = audioTrackOutput {
+            print("🔊 Pre-buffering \(audioPreBufferCount) audio buffers...")
+            
+            for i in 0..<audioPreBufferCount {
+                guard let audioBuffer = audioOutput.copyNextSampleBuffer() else { break }
+                let audioPTS = CMSampleBufferGetPresentationTimeStamp(audioBuffer)
+                let audioTimeSeconds = CMTimeGetSeconds(audioPTS)
+                
+                let adjustedAudioBuffer = adjustTimestamp(of: audioBuffer, offset: cumulativeTimeOffset)
+                let bufferToSend = adjustedAudioBuffer ?? audioBuffer
+                srtStream?.append(bufferToSend)
+                audioFrameCount += 1
+                lastAudioPTS = audioTimeSeconds
+                
+                // Track stats - calcola dimensione audio (PCM 44.1kHz stereo 16-bit = ~1024 samples * 4 bytes)
+                let audioBytes = 1024 * 4 // Dimensione approssimativa di un buffer audio PCM
+                stats?.recordAudioSample(bytes: audioBytes)
+                
+                print("  🔊 Pre-buffer \(i+1): audio @ \(String(format: "%.3f", audioTimeSeconds))s")
+            }
+            
+            print("✅ Audio pre-buffered: \(audioFrameCount) buffers, last PTS: \(String(format: "%.3f", lastAudioPTS))s")
+        }
+        
+        // Piccola pausa per permettere all'encoder di processare l'audio
+        try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+        
+        // Loop principale: AUDIO MASTER - il video si sincronizza con l'audio
         while reader.status == .reading && isPlaying && !Task.isCancelled {
             
-            // 1. Leggi e invia UN frame video
+            // 1. Leggi UN frame video
             guard let videoOutput = videoTrackOutput,
                   let videoBuffer = videoOutput.copyNextSampleBuffer() else {
                 // Fine del video - esci dal loop
@@ -339,35 +383,57 @@ class LocalVideoStreamer: ObservableObject {
             let videoTimeSeconds = CMTimeGetSeconds(videoPTS)
             lastVideoPTS = videoTimeSeconds
             
-            // Crea buffer con timestamp offsettato per SRT
-            let adjustedVideoBuffer = adjustTimestamp(of: videoBuffer, offset: cumulativeTimeOffset)
-            
-            // Invia il frame video con timestamp corretto
-            srtStream?.append(adjustedVideoBuffer ?? videoBuffer)
-            videoFrameCount += 1
-            
-            // 2. Leggi e invia audio SOLO se l'audio è "indietro" rispetto al video
-            // Questo mantiene audio e video sincronizzati
+            // 2. PRIMA dell'invio video: assicurati che l'audio sia "avanti" o allineato
+            // Se l'audio è indietro rispetto al video, aspetta e invia più audio
             if let audioOutput = audioTrackOutput {
-                // Leggi UN buffer audio solo se l'audio è indietro rispetto al video
-                while lastAudioPTS < videoTimeSeconds {
+                // L'audio deve essere leggermente AVANTI rispetto al video per sync corretto
+                let audioLeadTime: Double = 0.05 // 50ms di lead time per l'audio
+                
+                while lastAudioPTS < (videoTimeSeconds + audioLeadTime) {
                     guard let audioBuffer = audioOutput.copyNextSampleBuffer() else { break }
                     let audioPTS = CMSampleBufferGetPresentationTimeStamp(audioBuffer)
                     let audioTimeSeconds = CMTimeGetSeconds(audioPTS)
                     
-                    // Crea buffer con timestamp offsettato per SRT
                     let adjustedAudioBuffer = adjustTimestamp(of: audioBuffer, offset: cumulativeTimeOffset)
-                    
-                    // Invia il buffer audio con timestamp corretto
-                    srtStream?.append(adjustedAudioBuffer ?? audioBuffer)
+                    let bufferToSend = adjustedAudioBuffer ?? audioBuffer
+                    srtStream?.append(bufferToSend)
                     audioFrameCount += 1
                     lastAudioPTS = audioTimeSeconds
+                    
+                    // Track stats - dimensione audio PCM
+                    let audioBytes = 1024 * 4
+                    stats?.recordAudioSample(bytes: audioBytes)
                 }
+            }
+            
+            // 3. ORA invia il frame video (l'audio è già stato inviato)
+            let adjustedVideoBuffer = adjustTimestamp(of: videoBuffer, offset: cumulativeTimeOffset)
+            let bufferToSend = adjustedVideoBuffer ?? videoBuffer
+            srtStream?.append(bufferToSend)
+            videoFrameCount += 1
+            
+            // Track stats - stima dimensione video frame
+            // Per H.264 compressed frame, usiamo una stima basata su bitrate target
+            // Bitrate tipico: 5-20 Mbps -> ~160-660 KB per frame @ 30fps
+            let estimatedVideoBytes = 200_000 // ~200 KB per frame (stima conservativa)
+            stats?.recordVideoFrame(bytes: estimatedVideoBytes)
+            
+            // Aggiorna FPS ogni secondo
+            framesSinceLastUpdate += 1
+            let now = Date()
+            if now.timeIntervalSince(lastFPSUpdate) >= 1.0 {
+                let actualFPS = Double(framesSinceLastUpdate) / now.timeIntervalSince(lastFPSUpdate)
+                await MainActor.run {
+                    stats?.updateFPS(framesInLastSecond: framesSinceLastUpdate)
+                }
+                framesSinceLastUpdate = 0
+                lastFPSUpdate = now
             }
             
             if videoFrameCount % 30 == 0 {
                 let globalTime = videoTimeSeconds + cumulativeTimeOffset
-                print("📹 Video: \(videoFrameCount) frames @ \(String(format: "%.1f", videoTimeSeconds))s (global: \(String(format: "%.1f", globalTime))s) | Audio: \(audioFrameCount) buffers @ \(String(format: "%.1f", lastAudioPTS))s")
+                let drift = lastAudioPTS - videoTimeSeconds
+                print("📹 Video: \(videoFrameCount) frames @ \(String(format: "%.1f", videoTimeSeconds))s | Audio: \(audioFrameCount) @ \(String(format: "%.1f", lastAudioPTS))s | Drift: \(String(format: "%+.2f", drift))s")
             }
             
             // Aggiorna progresso (ogni 10 frame per ridurre overhead)
@@ -380,7 +446,7 @@ class LocalVideoStreamer: ObservableObject {
                 }
             }
             
-            // 3. Aspetta il tempo del frame per mantenere il ritmo
+            // 4. Aspetta il tempo del frame per mantenere il ritmo
             try? await Task.sleep(nanoseconds: frameIntervalNanos)
         }
         
